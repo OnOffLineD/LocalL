@@ -8,11 +8,26 @@ import zlib
 MAX_CHARS = 400_000
 
 
+SPECIAL_TOKENS = (
+    ("<|image|>", "<image>"),
+    ("<|video|>", "<video>"),
+    ("<|audio|>", "<audio>"),
+    ("<|image>", "<image>"),
+    ("<image|>", "<image>"),
+    ("<|audio>", "<audio>"),
+    ("<audio|>", "<audio>"),
+)
+
+
 def _clean(text: str) -> str:
     text = text.replace("\x00", " ")
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
     text = re.sub(r"\n\s*\n+", "\n", text).strip()
-    return text.encode("utf-16", "surrogatepass").decode("utf-16", "ignore").encode("utf-8", "ignore").decode("utf-8")
+    text = text.encode("utf-16", "surrogatepass").decode("utf-16", "ignore").encode("utf-8", "ignore").decode("utf-8")
+    for token, repl in SPECIAL_TOKENS:
+        if token in text:
+            text = text.replace(token, repl)
+    return text
 
 
 def _read_plain(path: str) -> str:

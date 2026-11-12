@@ -11,8 +11,23 @@ import numpy as np
 QUERY_PREFIX = "task: search result | query: "
 
 
+SPECIAL_TOKENS = (
+    ("<|image|>", "<image>"),
+    ("<|video|>", "<video>"),
+    ("<|audio|>", "<audio>"),
+    ("<|image>", "<image>"),
+    ("<image|>", "<image>"),
+    ("<|audio>", "<audio>"),
+    ("<audio|>", "<audio>"),
+)
+
+
 def _sanitize(text: str) -> str:
-    return text.encode("utf-16", "surrogatepass").decode("utf-16", "ignore").encode("utf-8", "ignore").decode("utf-8")
+    text = text.encode("utf-16", "surrogatepass").decode("utf-16", "ignore").encode("utf-8", "ignore").decode("utf-8")
+    for token, repl in SPECIAL_TOKENS:
+        if token in text:
+            text = text.replace(token, repl)
+    return text
 
 
 def doc_text(title: str, content: str) -> str:

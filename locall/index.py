@@ -124,13 +124,24 @@ def docs_phase(con, emb, cfg, rows):
         if not buf:
             return
         texts = [doc_text(name, c) for _, name, chunks in buf for c in chunks]
-        vecs = emb.docs(texts, batch_size=16)
-        i = 0
-        for fid, _, chunks in buf:
-            for c in chunks:
-                store.add_vector(con, fid, "text", vecs[i], c)
-                i += 1
-            _set_state(con, fid, 1)
+        try:
+            vecs = emb.docs(texts, batch_size=16)
+            i = 0
+            for fid, _, chunks in buf:
+                for c in chunks:
+                    store.add_vector(con, fid, "text", vecs[i], c)
+                    i += 1
+                _set_state(con, fid, 1)
+        except Exception:
+            for fid, name, chunks in buf:
+                try:
+                    f_texts = [doc_text(name, c) for c in chunks]
+                    f_vecs = emb.docs(f_texts, batch_size=16)
+                    for c, v in zip(chunks, f_vecs):
+                        store.add_vector(con, fid, "text", v, c)
+                    _set_state(con, fid, 1)
+                except Exception:
+                    _set_state(con, fid, -1)
         con.commit()
         buf.clear()
         buffered = 0
