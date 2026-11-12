@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LocalL</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  html, body {
+    background: #0D0F17;
+    font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #F8FAFC;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .container {
+    background: #0D0F17;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 검색 상단 바 */
+  .search-bar {
+    display: flex;
+    align-items: center;
+    padding: 16px 20px;
+    gap: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+    flex-shrink: 0;
+  }
+
+  .search-icon-box {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .search-icon-box img {
+    width: 20px;
+    height: 20px;
+    opacity: 0.85;
+    transition: opacity 0.2s;
+  }
+
+  .search-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 18px;
+    font-weight: 500;
+    color: #FFFFFF;
+    letter-spacing: -0.3px;
+  }
+
+  .search-input::placeholder {
+    color: rgba(148, 163, 184, 0.55);
+    font-weight: 400;
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .action-btn {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 9px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .action-btn:hover {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+  }
+
+  .action-btn img {
+    width: 17px;
+    height: 17px;
+    opacity: 0.8;
+    transition: opacity 0.15s;
+  }
+
+  .action-btn:hover img {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.6));
+  }
+
+  /* 탭 바 & 모핑 슬라이더 */
+  .tabs-bar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 7px 18px;
+    background: rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .tab-indicator {
+    position: absolute;
+    top: 7px;
+    left: 18px;
+    height: calc(100% - 14px);
+    width: 48px;
+    background: rgba(56, 189, 248, 0.14);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: 7px;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+    transition: all 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .tab-pill {
+    position: relative;
+    z-index: 2;
+    padding: 5px 11px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(148, 163, 184, 0.7);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color 0.18s ease;
+    white-space: nowrap;
+  }
+
+  .tab-pill:hover {
+    color: #F8FAFC;
+  }
+
+  .tab-pill.active {
+    color: #38BDF8;
+    font-weight: 600;
+  }
+
+  /* 결과 목록 */
+  .result-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .result-list::-webkit-scrollbar {
+    width: 6px;
+  }
+  .result-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+  }
+
+  .result-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    border-radius: 11px;
+    gap: 13px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    border: 1px solid transparent;
+  }
+
+  .result-item:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .result-item.selected {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.28);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  }
+
+  .item-thumb-box {
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .item-thumb-box img {
+    width: 20px;
+    height: 20px;
+    opacity: 0.85;
+  }
+
+  /* 사진 미리보기는 칸을 꽉 채운다 */
+  .item-thumb-box img.thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 1;
+  }
+
+  .item-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .item-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #F8FAFC;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-desc {
+    font-size: 12px;
+    color: rgba(148, 163, 184, 0.65);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-snippet {
+    font-size: 11px;
+    color: #38BDF8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-badge {
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(203, 213, 225, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .item-badge.highlight {
+    background: rgba(56, 189, 248, 0.12);
+    color: #38BDF8;
+    border-color: rgba(56, 189, 248, 0.25);
+  }
+
+  /* 상태 알림 (모델 적재 중, 색인 없음, 오류 등) */
+  .status-bar {
+    display: none;
+    padding: 6px 18px;
+    font-size: 11.5px;
+    color: #FBBF24;
+    background: rgba(251, 191, 36, 0.06);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 0;
+  }
+
+  /* 하단 푸터 바 (레퍼런스 미니멀 스타일) */
+  .footer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.35);
+    flex-shrink: 0;
+  }
+
+  .shortcuts {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .key-hint {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    font-weight: 400;
+    color: #94A3B8;
+  }
+
+  .key-tag {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    padding: 2.5px 7px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Pretendard", sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    color: #F1F5F9;
+    letter-spacing: -0.2px;
+    line-height: 1.3;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+
+  .footer-settings {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    transition: all 0.15s ease;
+  }
+  .footer-settings:hover {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+  }
+  .footer-settings img {
+    width: 16px;
+    height: 16px;
+    opacity: 0.75;
+    transition: opacity 0.15s, transform 0.2s;
+  }
+  .footer-settings:hover img {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.5));
+  }
+
+  /* 설정 팝오버 */
+  .settings-popover {
+    position: absolute;
+    right: 14px;
+    bottom: 46px;
+    width: 270px;
+    background: rgba(18, 22, 34, 0.96);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65);
+    padding: 10px;
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    gap: 3px;
+    animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes popoverFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .settings-popover.open {
+    display: flex;
+  }
+
+  .settings-popover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 6px 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #CBD5E1;
+  }
+
+  .settings-popover-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+  }
+  .settings-popover-close:hover {
+    opacity: 1;
+  }
+  .settings-popover-close img {
+    width: 14px;
+    height: 14px;
+  }
+
+  .settings-menu-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .settings-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .settings-menu-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .settings-menu-item.danger:hover {
+    background: rgba(239, 68, 68, 0.12);
+  }
+
+  .menu-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .menu-icon img {
+    width: 16px;
+    height: 16px;
+  }
+
+  .menu-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .menu-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: #F1F5F9;
+  }
+  .settings-menu-item.danger .menu-label {
+    color: #F87171;
+  }
+
+  .menu-sub {
+    font-size: 11px;
+    color: #64748B;
+  }
+
+  .menu-arrow {
+    color: #475569;
+    font-size: 15px;
+    font-weight: 300;
+  }
+
+  .settings-menu-divider {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 4px 6px;
+  }
+
+  /* 단축키 변경 모달 대화상자 */
+  .modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-overlay.open {
+    display: flex;
+  }
+
+  .modal-card {
+    width: 380px;
+    background: #131722;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    padding: 22px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    animation: popoverFadeIn 0.15s ease;
+  }
+
+  .modal-header {
+    font-size: 16px;
+    font-weight: 600;
+    color: #F8FAFC;
+  }
+
+  .modal-desc {
+    font-size: 12px;
+    color: #94A3B8;
+    line-height: 1.5;
+  }
+
+  .hotkey-display-box {
+    background: rgba(0, 0, 0, 0.4);
+    border: 2px dashed rgba(56, 189, 248, 0.4);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    color: #38BDF8;
+    letter-spacing: 0.5px;
+    min-height: 54px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-error {
+    font-size: 11.5px;
+    color: #F87171;
+    text-align: center;
+  }
+
+  .modal-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .modal-btn {
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .modal-btn.secondary {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #94A3B8;
+  }
+  .modal-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #F1F5F9;
+  }
+
+  .modal-btn.primary {
+    background: #0284C7;
+    border: 1px solid #38BDF8;
+    color: #FFFFFF;
+    font-weight: 600;
+  }
+  .modal-btn.primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* 빈 상태 */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 40px;
+    color: rgba(148, 163, 184, 0.5);
+    font-size: 13px;
+    text-align: center;
+  }
+  .empty-state img {
+    width: 42px;
+    height: 42px;
+    opacity: 0.3;
+  }
+</style>
+</head>
+<body>
+
+<div class="container" id="app">
+  <!-- 검색 입력 헤더 -->
+  <div class="search-bar">
+    <div class="search-icon-box">
+      <img id="search-img" src="assets/icon_search.svg" alt="" />
+    </div>
+    <input
+      type="text"
+      class="search-input"
+      id="input-query"
+      placeholder="파일명 또는 문서 내용을 입력하세요…"
+      autocomplete="off"
+      spellcheck="false"
+      autofocus
+    />
+    <div class="actions">
+      <button class="action-btn" id="btn-image-search" title="사진 검색">
+        <img src="assets/icon_image_search.svg" alt="" />
+      </button>
+      <button class="action-btn" id="btn-clear" title="지우기" style="display: none;">
+        <img src="assets/icon_close.svg" alt="" />
+      </button>
+    </div>
+  </div>
+
+  <!-- 카테고리 탭 (모핑 슬라이더) -->
+  <div class="tabs-bar" id="tabs-bar">
+    <div class="tab-indicator" id="tab-indicator"></div>
+    <div class="tab-pill active" data-kind="all">전체</div>
+    <div class="tab-pill" data-kind="doc">문서</div>
+    <div class="tab-pill" data-kind="image">이미지</div>
+    <div class="tab-pill" data-kind="dir">폴더</div>
+    <div class="tab-pill" data-kind="app">프로그램</div>
+    <div class="tab-pill" data-kind="archive">압축 파일</div>
+    <div class="tab-pill" data-kind="video">동영상</div>
+    <div class="tab-pill" data-kind="audio">오디오</div>
+  </div>
+
+  <!-- 결과 목록 영역 -->
+  <div class="result-list" id="results-container">
+    <div class="empty-state">
+      <img src="assets/icon_search.svg" alt="" />
+      <div>찾는 내용을 적거나, 사진을 붙여넣기(Ctrl+V) 하세요.</div>
+    </div>
+  </div>
+
+  <div class="status-bar" id="status-bar"></div>
+
+  <!-- 하단 상태 바 (레퍼런스 스타일) -->
+  <div class="footer-bar">
+    <div class="shortcuts">
+      <div class="key-hint"><span class="key-tag">Enter</span> 열기</div>
+      <div class="key-hint"><span class="key-tag">Ctrl+Enter</span> 위치 열기</div>
+      <div class="key-hint"><span class="key-tag">Tab</span> 종류 순환</div>
+      <div class="key-hint"><span class="key-tag">Esc</span> 닫기</div>
+    </div>
+    <div class="footer-settings" id="btn-settings" title="설정">
+      <img src="assets/icon_settings.svg" alt="" />
+    </div>
+  </div>
+
+  <!-- 설정 팝오버 메뉴 -->
+  <div class="settings-popover" id="settings-popover">
+    <div class="settings-popover-header">
+      <span>환경 설정</span>
+      <button class="settings-popover-close" id="btn-close-settings" title="닫기">
+        <img src="assets/icon_close.svg" alt="" />
+      </button>
+    </div>
+    
+    <div class="settings-menu-list">
+      <div class="settings-menu-item" id="menu-hotkey">
+        <div class="menu-icon"><img src="assets/icon_keyboard.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">단축키 변경</div>
+          <div class="menu-sub" id="display-hotkey">현재: Ctrl+Alt+Space</div>
+        </div>
+        <div class="menu-arrow">›</div>
+      </div>
+
+      <div class="settings-menu-item" id="menu-reindex">
+        <div class="menu-icon"><img src="assets/icon_refresh.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">색인 만들기 / 갱신</div>
+          <div class="menu-sub">새 창에서 인덱서 실행</div>
+        </div>
+        <div class="menu-arrow">›</div>
+      </div>
+
+      <div class="settings-menu-divider"></div>
+
+      <div class="settings-menu-item danger" id="menu-quit">
+        <div class="menu-icon"><img src="assets/icon_power.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">LocalL 종료</div>
+          <div class="menu-sub">백그라운드 프로세스 종료</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 단축키 변경 모달 대화상자 -->
+  <div class="modal-overlay" id="modal-hotkey">
+    <div class="modal-card">
+      <div class="modal-header">단축키 변경</div>
+      <div class="modal-desc">Ctrl, Alt, Shift, Win 중 하나 이상과 조합하여 키를 누르세요.</div>
+      <div class="hotkey-display-box" id="hotkey-recorder-box">
+        <span id="recorded-hotkey-text">키를 입력하세요…</span>
+      </div>
+      <div class="modal-error" id="hotkey-error-text" style="display: none;"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn secondary" id="btn-cancel-hotkey">취소 (Esc)</button>
+        <button class="modal-btn primary" id="btn-save-hotkey" disabled>적용하기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentResults = [];
+  let selectedIndex = 0;
+  let currentKind = "all";
+  let searchTimer = null;
+  let searchSeq = 0;        // 가장 최근 요청 번호: 늦게 도착한 예전 결과는 버린다
+  let activeImage = null;   // 사진 검색 중이면 { path, text }
+
+  const input = document.getElementById("input-query");
+  const clearBtn = document.getElementById("btn-clear");
+  const container = document.getElementById("results-container");
+  const tabsBar = document.getElementById("tabs-bar");
+  const tabIndicator = document.getElementById("tab-indicator");
+  const tabPills = Array.from(document.querySelectorAll(".tab-pill"));
+
+  // 모핑 인디케이터 위치 갱신 함수
+  function updateTabIndicator(pill) {
+    if (!pill || !tabsBar || !tabIndicator) return;
+    const barRect = tabsBar.getBoundingClientRect();
+    const pillRect = pill.getBoundingClientRect();
+    const left = pillRect.left - barRect.left;
+    const width = pillRect.width;
+
+    tabIndicator.style.left = left + "px";
+    tabIndicator.style.width = width + "px";
+  }
+
+  // 탭 활성화 및 모핑 애니메이션
+  function activateTab(pill) {
+    if (!pill) return;
+    tabPills.forEach((p) => p.classList.remove("active"));
+    pill.classList.add("active");
+    currentKind = pill.dataset.kind;
+    updateTabIndicator(pill);
+    triggerSearch();
+  }
+
+  // 탭 종류 순환 (Tab / Shift+Tab)
+  function cycleTab(direction) {
+    const curIdx = tabPills.findIndex((p) => p.dataset.kind === currentKind);
+    const nextIdx = (curIdx + direction + tabPills.length) % tabPills.length;
+    activateTab(tabPills[nextIdx]);
+  }
+
+  // 포커스 강제 함수 (마우스 클릭 없이 즉시 타이핑)
+  window.focusInput = function() {
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  };
+
+  window.addEventListener("focus", window.focusInput);
+  document.addEventListener("DOMContentLoaded", () => {
+    window.focusInput();
+    const activePill = document.querySelector(".tab-pill.active");
+    updateTabIndicator(activePill);
+    setTimeout(() => updateTabIndicator(activePill), 50);
+  });
+  setTimeout(window.focusInput, 30);
+  setTimeout(window.focusInput, 120);
+
+  // IPC 통신 헬퍼
+  function postToRust(msg) {
+    if (window.ipc) {
+      window.ipc.postMessage(JSON.stringify(msg));
+    }
+  }
+
+  // 검색 트리거
+  function triggerSearch() {
+    const q = input.value.trim();
+    if (clearBtn) {
+      clearBtn.style.display = q ? "flex" : "none";
+    }
+    searchSeq++;
+    if (activeImage) {
+      if (input.value === activeImage.text) {
+        postToRust({ type: "search_image", path: activeImage.path, seq: searchSeq });
+        return;
+      }
+      activeImage = null;   // 검색창을 고치면 글자 검색으로 돌아간다
+    }
+    if (!q) {
+      currentResults = [];
+      renderEmpty("찾는 내용을 적거나, 사진을 붙여넣기(Ctrl+V) 하세요.");
+      return;
+    }
+    postToRust({ type: "search", query: q, kind: currentKind, seq: searchSeq });
+  }
+
+  // Rust -> JS: 이 사진과 비슷한 사진 찾기 시작
+  window.startImageSearch = function(path, label) {
+    activeImage = { path: path, text: "[사진 검색] " + label };
+    input.value = activeImage.text;
+    currentResults = [];
+    renderEmpty("사진과 같거나 비슷한 이미지를 찾는 중입니다…");
+    triggerSearch();
+  };
+
+  // Rust -> JS: 상태 알림 (빈 문자열이면 숨김)
+  window.setStatus = function(text) {
+    const bar = document.getElementById("status-bar");
+    bar.textContent = text || "";
+    bar.style.display = text ? "block" : "none";
+  };
+
+  // 클립보드의 사진(캡처 화면, 탐색기에서 복사한 사진 파일)을 붙여넣으면 사진 검색
+  input.addEventListener("paste", (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (const item of items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        e.preventDefault();
+        const reader = new FileReader();
+        reader.onload = () => {
+          const data = String(reader.result);
+          postToRust({ type: "paste_image", data: data.slice(data.indexOf(",") + 1) });
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+    }
+  });
+
+  input.addEventListener("input", () => {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(triggerSearch, 60);
+  });
+
+  clearBtn.addEventListener("click", () => {
+    input.value = "";
+    triggerSearch();
+    input.focus();
+  });
+
+  // 카테고리 탭 마우스 클릭
+  tabPills.forEach((pill) => {
+    pill.addEventListener("click", () => {
+      activateTab(pill);
+    });
+  });
+
+  // 결과 렌더링 (Rust -> JS)
+  window.renderSearchResults = function(results, seq) {
+    if (seq !== undefined && seq !== searchSeq) return;   // 이미 다른 검색으로 넘어감
+    currentResults = results || [];
+    selectedIndex = 0;
+
+    if (currentResults.length === 0) {
+      renderEmpty(activeImage ? "비슷한 사진을 찾지 못했습니다." : "찾지 못했습니다. 다른 표현으로 시도해 보세요.");
+      return;
+    }
+
+    container.innerHTML = "";
+    currentResults.forEach((r, idx) => {
+      const item = document.createElement("div");
+      item.className = "result-item" + (idx === 0 ? " selected" : "");
+
+      // 심플하고 깔끔한 아웃라인 SVG 뱃지 아이콘
+      let iconSrc = "assets/icon_doc.svg";
+      if (r.kind === "dir") iconSrc = "assets/icon_folder.svg";
+      else if (r.kind === "app") iconSrc = "assets/icon_app.svg";
+      else if (r.kind === "image") iconSrc = "assets/icon_image_search.svg";
+
+      let badgeText = r.runnable ? "실행 파일" : "";
+      if (r.match_type === "text") badgeText = "본문 내용";
+      else if (r.match_type === "same_image") badgeText = "같은 사진";
+      else if (r.match_type === "very_similar") badgeText = "매우 유사";
+      else if (r.match_type === "image") badgeText = "비슷한 사진";
+
+      // 사진은 미리보기를 보여 주고, 못 만들면 아이콘으로 되돌린다
+      const thumbHtml = r.thumb
+        ? `<img class="thumb-img" loading="lazy" src="thumb?p=${encodeURIComponent(r.path)}" alt=""
+             onerror="this.onerror=null; this.className=''; this.src='${iconSrc}';" />`
+        : `<img src="${iconSrc}" alt="" />`;
+
+      item.innerHTML = `
+        <div class="item-thumb-box">
+          ${thumbHtml}
+        </div>
+        <div class="item-content">
+          <div class="item-title">${escapeHtml(r.name)}</div>
+          <div class="item-desc">${escapeHtml(r.path)}</div>
+          ${r.snippet ? `<div class="item-snippet">${escapeHtml(r.snippet)}</div>` : ""}
+        </div>
+        ${badgeText ? `<div class="item-badge ${r.match_type === 'text' || r.match_type.includes('image') ? 'highlight' : ''}">${badgeText}</div>` : ""}
+      `;
+
+      item.addEventListener("click", () => {
+        selectIndex(idx);
+        postToRust({ type: "open", path: r.path, reveal: false });
+      });
+
+      container.appendChild(item);
+    });
+  };
+
+  function renderEmpty(text) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <img src="assets/icon_search.svg" alt="" />
+        <div>${escapeHtml(text)}</div>
+      </div>
+    `;
+  }
+
+  function selectIndex(idx) {
+    if (idx < 0 || idx >= currentResults.length) return;
+    selectedIndex = idx;
+    const items = container.querySelectorAll(".result-item");
+    items.forEach((item, i) => {
+      item.classList.toggle("selected", i === selectedIndex);
+    });
+    if (items[selectedIndex]) {
+      items[selectedIndex].scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function escapeHtml(str) {
+    if (!str) return "";
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  // --- 설정 및 단축키 관리 ---
+  const settingsPopover = document.getElementById("settings-popover");
+  const btnCloseSettings = document.getElementById("btn-close-settings");
+  const menuHotkey = document.getElementById("menu-hotkey");
+  const menuReindex = document.getElementById("menu-reindex");
+  const menuQuit = document.getElementById("menu-quit");
+  const displayHotkey = document.getElementById("display-hotkey");
+
+  const modalHotkey = document.getElementById("modal-hotkey");
+  const recordedHotkeyText = document.getElementById("recorded-hotkey-text");
+  const hotkeyErrorText = document.getElementById("hotkey-error-text");
+  const btnCancelHotkey = document.getElementById("btn-cancel-hotkey");
+  const btnSaveHotkey = document.getElementById("btn-save-hotkey");
+
+  let currentHotkey = "ctrl+alt+space";
+  let pendingHotkey = "";
+  let isRecordingHotkey = false;
+
+  function formatHotkey(str) {
+    if (!str) return "";
+    return str
+      .split("+")
+      .map((p) => {
+        const lower = p.toLowerCase();
+        if (lower === "ctrl") return "Ctrl";
+        if (lower === "alt") return "Alt";
+        if (lower === "shift") return "Shift";
+        if (lower === "win") return "Win";
+        if (lower === "space") return "Space";
+        return p.toUpperCase();
+      })
+      .join(" + ");
+  }
+
+  function toggleSettings(open) {
+    const shouldOpen = open !== undefined ? open : !settingsPopover.classList.contains("open");
+    if (shouldOpen) {
+      postToRust({ type: "get_config" });
+      settingsPopover.classList.add("open");
+    } else {
+      settingsPopover.classList.remove("open");
+    }
+  }
+
+  document.getElementById("btn-settings").addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSettings();
+  });
+
+  btnCloseSettings.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSettings(false);
+  });
+
+  // 팝오버 바깥 클릭 시 닫기
+  document.addEventListener("click", (e) => {
+    if (settingsPopover.classList.contains("open")) {
+      if (!settingsPopover.contains(e.target) && !document.getElementById("btn-settings").contains(e.target)) {
+        toggleSettings(false);
+      }
+    }
+  });
+
+  // 색인 만들기 / 갱신 실행
+  menuReindex.addEventListener("click", () => {
+    toggleSettings(false);
+    postToRust({ type: "run_index" });
+  });
+
+  // LocalL 종료
+  menuQuit.addEventListener("click", () => {
+    postToRust({ type: "quit" });
+  });
+
+  // 단축키 변경 모달 열기
+  menuHotkey.addEventListener("click", () => {
+    toggleSettings(false);
+    openHotkeyModal();
+  });
+
+  function openHotkeyModal() {
+    pendingHotkey = "";
+    isRecordingHotkey = true;
+    recordedHotkeyText.textContent = "조합할 키를 누르세요… (예: Ctrl + Alt + Space)";
+    hotkeyErrorText.style.display = "none";
+    btnSaveHotkey.disabled = true;
+    modalHotkey.classList.add("open");
+  }
+
+  function closeHotkeyModal() {
+    isRecordingHotkey = false;
+    modalHotkey.classList.remove("open");
+    input.focus();
+  }
+
+  btnCancelHotkey.addEventListener("click", closeHotkeyModal);
+
+  btnSaveHotkey.addEventListener("click", () => {
+    if (pendingHotkey) {
+      btnSaveHotkey.disabled = true;
+      hotkeyErrorText.style.display = "none";
+      postToRust({ type: "update_hotkey", hotkey: pendingHotkey });
+    }
+  });
+
+  // Rust 콜백: 단축키 변경 결과 수신
+  window.onHotkeyUpdated = function(ok, msg) {
+    if (ok) {
+      currentHotkey = msg;
+      displayHotkey.textContent = "현재: " + formatHotkey(currentHotkey);
+      closeHotkeyModal();
+    } else {
+      btnSaveHotkey.disabled = false;
+      hotkeyErrorText.textContent = msg || "단축키 등록에 실패했습니다.";
+      hotkeyErrorText.style.display = "block";
+    }
+  };
+
+  // Rust 콜백: 설정 정보 수신
+  window.onConfigLoaded = function(cfg) {
+    if (cfg && cfg.hotkey) {
+      currentHotkey = cfg.hotkey;
+      displayHotkey.textContent = "현재: " + formatHotkey(currentHotkey);
+    }
+  };
+
+  // 단축키 레코딩 키 핸들러
+  function handleHotkeyRecording(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === "Escape") {
+      closeHotkeyModal();
+      return;
+    }
+
+    const isModifier = ["Control", "Alt", "Shift", "Meta"].includes(e.key);
+    const mods = [];
+    if (e.ctrlKey) mods.push("ctrl");
+    if (e.altKey) mods.push("alt");
+    if (e.shiftKey) mods.push("shift");
+    if (e.metaKey) mods.push("win");
+
+    if (isModifier) {
+      if (mods.length > 0) {
+        recordedHotkeyText.textContent = mods.map(m => m.toUpperCase()).join(" + ") + " + …";
+      }
+      return;
+    }
+
+    if (mods.length === 0) {
+      hotkeyErrorText.textContent = "Ctrl, Alt, Shift, Win 중 하나 이상과 조합해야 합니다.";
+      hotkeyErrorText.style.display = "block";
+      return;
+    }
+
+    // 일반 키 매핑
+    let keyName = "";
+    const code = e.code;
+    if (code.startsWith("Key")) {
+      keyName = code.slice(3).toLowerCase();
+    } else if (code.startsWith("Digit")) {
+      keyName = code.slice(5);
+    } else if (/^F\d+$/.test(code)) {
+      keyName = code.toLowerCase();
+    } else {
+      const map = {
+        Space: "space",
+        Enter: "enter",
+        Tab: "tab",
+        Backspace: "backspace",
+        Delete: "delete",
+        Insert: "insert",
+        Home: "home",
+        End: "end",
+        PageUp: "pageup",
+        PageDown: "pagedown",
+        ArrowUp: "up",
+        ArrowDown: "down",
+        ArrowLeft: "left",
+        ArrowRight: "right",
+        Backquote: "`",
+        Minus: "-",
+        Equal: "=",
+        BracketLeft: "[",
+        BracketRight: "]",
+        Backslash: "\\",
+        Semicolon: ";",
+        Quote: "'",
+        Comma: ",",
+        Period: ".",
+        Slash: "/"
+      };
+      keyName = map[code] || "";
+    }
+
+    if (!keyName) {
+      hotkeyErrorText.textContent = "지원되지 않는 키입니다: " + e.key;
+      hotkeyErrorText.style.display = "block";
+      return;
+    }
+
+    pendingHotkey = [...mods, keyName].join("+");
+    recordedHotkeyText.textContent = formatHotkey(pendingHotkey);
+    hotkeyErrorText.style.display = "none";
+    btnSaveHotkey.disabled = false;
+  }
+
+  // 키보드 조작 (Tab 키 우선 처리)
+  function handleKeyDown(e) {
+    if (isRecordingHotkey) {
+      handleHotkeyRecording(e);
+      return;
+    }
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (modalHotkey.classList.contains("open")) {
+        closeHotkeyModal();
+        return;
+      }
+      if (settingsPopover.classList.contains("open")) {
+        toggleSettings(false);
+        return;
+      }
+      if (activeImage) {
+        input.value = "";
+        triggerSearch();
+        return;
+      }
+      postToRust({ type: "close" });
+      return;
+    }
+
+    if (e.key === "Tab") {
+      e.preventDefault();
+      cycleTab(e.shiftKey ? -1 : 1);
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectIndex(selectedIndex + 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectIndex(selectedIndex - 1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (currentResults[selectedIndex]) {
+        postToRust({
+          type: "open",
+          path: currentResults[selectedIndex].path,
+          reveal: e.ctrlKey
+        });
+      }
+    }
+  }
+
+  // 입력창의 keydown은 window까지 올라오므로 한 곳에서만 받는다 (두 곳에 걸면 두 번씩 처리된다)
+  window.addEventListener("keydown", handleKeyDown);
+
+  // 사진 검색 버튼
+  document.getElementById("btn-image-search").addEventListener("click", () => {
+    postToRust({ type: "pick_image" });
+  });
+
+  // 초기 설정 정보 로드
+  setTimeout(() => {
+    postToRust({ type: "get_config" });
+  }, 100);
+</script>
+
+</body>
+</html>

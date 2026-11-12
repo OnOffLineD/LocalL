@@ -15,8 +15,12 @@ import sys
 import threading
 import tkinter as tk
 import winreg
+from pathlib import Path
 
 from . import actions, config, hotkey
+
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
 
 ROWS = 7           # 한 번에 보이는 줄 수
 FETCH = 28         # 검색해 오는 결과 수
@@ -25,7 +29,13 @@ FONT = "Malgun Gothic"
 DEFAULT_HOTKEY = "ctrl+shift+space"
 KINDS = [("all", "전체"), ("doc", "문서"), ("image", "이미지"), ("dir", "폴더"),
          ("video", "동영상"), ("audio", "오디오"), ("app", "프로그램"), ("archive", "압축")]
-MATCH = {"name": "이름·위치", "text": "문서 내용", "image": "이미지 내용"}
+MATCH = {
+    "name": "이름·위치",
+    "text": "문서 내용",
+    "image": "비슷한 사진",
+    "same_image": "같은 사진",
+    "very_similar": "매우 유사",
+}
 
 LIGHT = dict(bg="#ffffff", border="#b9b8b3", line="#e6e5e1", fg="#1c1c1a", dim="#6d6c67",
              sel="#e4eefd", icon="#eeede9")
@@ -76,6 +86,8 @@ class App:
         self.shown_query = None         # 지금 화면의 결과가 어떤 (검색어, 종류)의 것인지
         self.visible = self.modal = False
         self.thumbs = {}                # 파일 id → PhotoImage (없으면 None)
+        self.active_image = None        # 이미지 검색 대상 (경로 또는 PIL Image)
+        self.img_icon = None            # 이미지 검색 버튼 아이콘 PhotoImage
         self.timer = None
         self.status = "모델과 색인을 불러오는 중…"
 
@@ -111,17 +123,39 @@ class App:
         self.scale = root.winfo_fpixels("1i") / 96
         px = self.px
 
+        is_dark = (c == DARK)
+        icon_path = ASSETS_DIR / ("icon_image_search_dark.png" if is_dark else "icon_image_search_light.png")
+        if icon_path.exists():
+            try:
+                from PIL import Image, ImageTk
+                im = Image.open(icon_path).convert("RGBA")
+                icon_sz = px(22)
+                im = im.resize((icon_sz, icon_sz), Image.Resampling.LANCZOS)
+                self.img_icon = ImageTk.PhotoImage(im)
+            except Exception:
+                self.img_icon = None
+
         self.outer = tk.Frame(root, bg=c["border"], padx=1, pady=1)
         self.outer.pack(fill="both", expand=True)
         box = tk.Frame(self.outer, bg=c["bg"])
         box.pack(fill="both", expand=True)
 
+        search_box = tk.Frame(box, bg=c["bg"])
+        search_box.pack(fill="x", padx=px(16), pady=(px(12), px(10)))
+
         self.var = tk.StringVar()
-        self.entry = tk.Entry(box, textvariable=self.var, font=(FONT, 15), bd=0, relief="flat",
+        self.entry = tk.Entry(search_box, textvariable=self.var, font=(FONT, 15), bd=0, relief="flat",
                               bg=c["bg"], fg=c["fg"], insertbackground=c["fg"],
                               highlightthickness=0, selectbackground=c["sel"], selectforeground=c["fg"])
-        self.entry.pack(fill="x", padx=px(16), pady=(px(12), px(10)))
+        self.entry.pack(side="left", fill="x", expand=True)
         self.var.trace_add("write", lambda *_: self._schedule())
+
+        if self.img_icon:
+            self.btn_img = tk.Label(search_box, image=self.img_icon, bg=c["bg"], cursor="hand2")
+        else:
+            self.btn_img = tk.Label(search_box, text="🖼", font=(FONT, 12), bg=c["bg"], fg=c["dim"], cursor="hand2")
+        self.btn_img.pack(side="right", padx=(px(8), 0))
+        self.btn_img.bind("<Button-1>", lambda ev: self._pick_image_file())
 
         tk.Frame(box, bg=c["line"], height=1).pack(fill="x")
         self.list = tk.Frame(box, bg=c["bg"])
@@ -142,7 +176,9 @@ class App:
         gear.bind("<Button-1>", self._menu)
 
         e = self.entry
-        e.bind("<Escape>", lambda ev: self.hide())
+        e.bind("<Escape>", lambda ev: self._on_escape())
+        e.bind("<Control-v>", self._on_paste)
+        e.bind("<Control-V>", self._on_paste)
         e.bind("<Return>", lambda ev: self._enter(False))
         e.bind("<Control-Return>", lambda ev: self._enter(True))
         e.bind("<Down>", lambda ev: self._move(1))
@@ -192,13 +228,23 @@ class App:
             req = self.requests.get()
             while not self.requests.empty():  # 밀린 요청은 버리고 최신 것만
                 req = self.requests.get()
-            seq, text, kind = req
-            try:
-                results = self.searcher.search(text, kind, n=FETCH)
-                self.events.put(("results", seq, text, kind, results))
-            except Exception as e:
-                log.exception("검색 실패")
-                self.events.put(("error", f"검색 실패: {e}"))
+            kind = req[0]
+            if kind == "text":
+                _, seq, text, fkind = req
+                try:
+                    results = self.searcher.search(text, fkind, n=FETCH)
+                    self.events.put(("results", seq, text, fkind, results))
+                except Exception as e:
+                    log.exception("검색 실패")
+                    self.events.put(("error", f"검색 실패: {e}"))
+            elif kind == "image":
+                _, seq, img_target, label = req
+                try:
+                    results = self.searcher.search_image(img_target, n=FETCH)
+                    self.events.put(("results", seq, label, "image", results))
+                except Exception as e:
+                    log.exception("이미지 검색 실패")
+                    self.events.put(("error", f"이미지 검색 실패: {e}"))
 
     def _thumb_worker(self):
         from PIL import ImageOps
@@ -252,15 +298,89 @@ class App:
             self.root.after_cancel(self.timer)
         self.timer = self.root.after(delay, self._search_now)
 
+    def _trigger_image_search(self, target, label):
+        self.active_image = target
+        self.var.set(label)
+        self.entry.icursor("end")
+        self.seq += 1
+        self.requests.put(("image", self.seq, target, label))
+
+    def _pick_image_file(self):
+        from tkinter import filedialog
+
+        filetypes = [
+            ("이미지 파일", "*.png *.jpg *.jpeg *.webp *.bmp *.gif"),
+            ("모든 파일", "*.*")
+        ]
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="검색할 사진 선택",
+            filetypes=filetypes
+        )
+        if path:
+            self._trigger_image_search(path, f"[사진 검색] {os.path.basename(path)}")
+
+    def _on_paste(self, ev=None):
+        from PIL import ImageGrab
+
+        try:
+            im = ImageGrab.grabclipboard()
+        except Exception:
+            im = None
+
+        if im is not None:
+            if isinstance(im, list):
+                for fpath in im:
+                    if os.path.isfile(fpath) and os.path.splitext(fpath)[1].lower() in config.IMAGE_CONTENT_EXTS:
+                        self._trigger_image_search(fpath, f"[사진 검색] {os.path.basename(fpath)}")
+                        return "break"
+            else:
+                self._trigger_image_search(im, "[사진 검색] 클립보드 이미지")
+                return "break"
+
+        try:
+            text = self.root.clipboard_get().strip().strip('"').strip("'")
+            if os.path.isfile(text) and os.path.splitext(text)[1].lower() in config.IMAGE_CONTENT_EXTS:
+                self._trigger_image_search(text, f"[사진 검색] {os.path.basename(text)}")
+                return "break"
+        except Exception:
+            pass
+
+        return None
+
+    def _on_escape(self):
+        if self.active_image:
+            self.active_image = None
+            self.var.set("")
+            self.shown_query = None
+            self.results = []
+            self._render()
+        else:
+            self.hide()
+
     def _search_now(self):
         self.timer = None
         text = self.var.get().strip()
         self.seq += 1
+
+        if self.active_image:
+            if text.startswith("[사진 검색]"):
+                self.requests.put(("image", self.seq, self.active_image, text))
+                return
+            else:
+                self.active_image = None
+
         if not text or self.searcher is None:
             self.results, self.shown_query = [], (text, KINDS[self.kind_i][0])
             self._render()
             return
-        self.requests.put((self.seq, text, KINDS[self.kind_i][0]))
+
+        clean_text = text.strip('"').strip("'")
+        if os.path.isfile(clean_text) and os.path.splitext(clean_text)[1].lower() in config.IMAGE_CONTENT_EXTS:
+            self._trigger_image_search(clean_text, f"[사진 검색] {os.path.basename(clean_text)}")
+            return
+
+        self.requests.put(("text", self.seq, text, KINDS[self.kind_i][0]))
 
     def _cycle_kind(self, step):
         self.kind_i = (self.kind_i + step) % len(KINDS)
@@ -310,10 +430,12 @@ class App:
             typed = bool(self.var.get().strip())
             if self.status:
                 detail = self.status
+            elif self.active_image:
+                detail = "사진과 일치하거나 유사한 이미지를 찾는 중입니다…"
             elif typed and self.shown_query == (self.var.get().strip(), KINDS[self.kind_i][0]):
-                detail = "찾지 못했습니다. 다른 표현으로 적어 보세요."
+                detail = "찾지 못했습니다. 다른 표현이나 사진으로 시도해 보세요."
             else:
-                detail = "찾는 파일을 말하듯이 적어 보세요. 예: 작년 연말정산 서류, 바닷가에서 찍은 사진"
+                detail = "찾는 파일명을 적거나, 사진을 붙여넣기(Ctrl+V) 또는 우측 🖼 버튼으로 검색하세요."
             hint = f"Tab 종류: {kind} · Esc 닫기 · 단축키 {hotkey.display(self.hotkey_text)}"
             if not self.hotkey_ok:
                 hint = f"단축키 {hotkey.display(self.hotkey_text)} 등록 실패 — ⚙ 설정에서 바꿔 주세요"
