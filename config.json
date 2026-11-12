@@ -1,0 +1,33 @@
+{
+  "hotkey": "ctrl+shift+space",
+  "roots": [
+    "~/Desktop",
+    "~/Documents",
+    "~/Downloads",
+    "~/Pictures",
+    "~/Videos",
+    "~/Music",
+    "<current_drive>"
+  ],
+  "include_kinds": ["dir", "doc", "image", "video", "audio", "archive", "app"],
+  "content_kinds": ["doc", "image"],
+  "exclude_dir_names": [
+    "node_modules", "__pycache__", "site-packages", "$recycle.bin",
+    "system volume information", "windows", "program files", "program files (x86)",
+    "programdata", "appdata", "windowsapps", "wpsystem", "wudownloadcache",
+    "steamlibrary", "steamapps", "perflogs", "recovery", "msocache", "npki"
+  ],
+  "exclude_paths": [],
+  "cloud_dir_names": [
+    "onedrive", "google drive", "googledrive", "내 드라이브", "my drive",
+    "dropbox", "iclouddrive", "icloud drive", "creative cloud files"
+  ],
+  "cloud_paths": [],
+  "skip_hidden": true,
+  "chunk_chars": 1200,
+  "max_chunks_per_file": 16,
+  "max_doc_mb": 200,
+  "min_image_kb": 8,
+  "model": "google/embeddinggemma-2",
+  "dim": 512
+}

@@ -1,0 +1,23 @@
+# 색인 결과 및 데이터베이스
+data/
+*.db
+*.db-*
+*.log
+
+# AI 모델 가중치 (다운로드된 모델)
+models/
+
+# 파이썬 가상환경 및 내장 포터블 런타임 (대용량 바이너리)
+.venv/
+python/
+
+# 파이썬 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE 및 OS 임시 파일
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
