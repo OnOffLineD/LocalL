@@ -1,0 +1,94 @@
+# PR을 올리거나 고치면 Windows용 배포본을 빌드해 Actions 결과물(artifact)로 올린다.
+# 릴리스는 만들지 않으므로 사용자에게 자동 업데이트가 가지 않는다. 내려받아 테스트하는 용도.
+#
+# 받는 곳: PR → Checks → Build → Summary 아래 Artifacts (또는 Actions 탭 → 해당 실행)
+# 압축을 풀고 locall.exe를 실행한다. 이미 쓰던 설치본이 있으면 locall.exe, locall-index.exe만
+# 바꿔 넣어도 된다 (화면은 exe 안에 들어 있다).
+#
+# 빌드·DLL·패키징 단계는 release.yml과 같다. 한쪽을 고치면 다른 쪽도 맞춘다.
+name: Build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 같은 PR에 새로 푸시하면 이전 빌드는 멈춘다
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --bins --locked
+
+      # 실행 중에 불러오는 DLL. 판을 고정하고 SHA-256을 확인한다.
+      # - onnxruntime.dll: ort 2.0.0-rc.15는 ONNX Runtime 1.17 이상이 필요하다
+      # - pdfium.dll: pdfium-render 0.9.4의 pdfium_latest는 PDFium 7881에 맞춰져 있다
+      - name: Download runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dll | Out-Null
+          function Get-Checked($url, $file, $sha) {
+            Invoke-WebRequest -Uri $url -OutFile $file
+            $got = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $sha) { throw "$file checksum mismatch: $got" }
+          }
+          Get-Checked "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip" "dll/ort.zip" "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da"
+          Expand-Archive dll/ort.zip -DestinationPath dll/ort
+          Copy-Item dll/ort/onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll, dll/ort/onnxruntime-win-x64-1.22.0/lib/onnxruntime_providers_shared.dll dll/
+          Get-Checked "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-win-x64.tgz" "dll/pdfium.tgz" "73cc0de638ac2095e7445bf56a38200a5b7c7ca0e9f4ba144598f2457377ac08"
+          New-Item -ItemType Directory -Force dll/pdfium | Out-Null
+          tar -xzf dll/pdfium.tgz -C dll/pdfium
+          Copy-Item dll/pdfium/bin/pdfium.dll dll/
+          Get-ChildItem dll/*.dll
+
+      # Visual C++ 런타임 (locall.exe와 onnxruntime.dll이 쓴다). 설치 안 된 PC가 있어서
+      # 실행 파일 옆에 같이 둔다 (Microsoft가 허용하는 app-local 배포).
+      - name: Copy Visual C++ runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw "Visual C++ redist folder not found under $vs" }
+          Write-Host "Using $($crt.FullName)"
+          foreach ($name in "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll") {
+            Copy-Item (Join-Path $crt.FullName $name) dll/
+          }
+          Get-ChildItem dll/*.dll
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "dist/LocalL"
+          New-Item -ItemType Directory -Force "$out/assets/ui", "$out/locall/assets" | Out-Null
+          Copy-Item target/release/locall.exe, target/release/locall-index.exe, target/release/locall-search.exe $out
+          Copy-Item dll/*.dll $out
+          Copy-Item assets/ui/* "$out/assets/ui"
+          Copy-Item config.json, LocalL_Rust.bat, LocalL.bat, index.bat, requirements.txt $out
+          Copy-Item locall/*.py "$out/locall"
+          Copy-Item locall/assets/* "$out/locall/assets"
+          Get-ChildItem $out
+
+      # 폴더째 올린다 (GitHub가 zip 하나로 묶어 내려준다)
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalL-windows-x64-${{ github.event.pull_request.number && format('pr{0}', github.event.pull_request.number) || 'manual' }}-${{ github.run_number }}
+          path: dist/LocalL
+          if-no-files-found: error
+          retention-days: 14
