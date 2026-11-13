@@ -78,6 +78,22 @@ jobs:
           Copy-Item dll/pdfium/bin/pdfium.dll dll/
           Get-ChildItem dll/*.dll
 
+      # Visual C++ 런타임 (locall.exe와 onnxruntime.dll이 쓴다). 설치 안 된 PC가 있어서
+      # 실행 파일 옆에 같이 둔다 (Microsoft가 허용하는 app-local 배포).
+      - name: Copy Visual C++ runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT" -Directory |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $crt) { throw "Visual C++ redist folder not found under $vs" }
+          Write-Host "Using $($crt.FullName)"
+          foreach ($name in "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll") {
+            Copy-Item (Join-Path $crt.FullName $name) dll/
+          }
+          Get-ChildItem dll/*.dll
+
       - name: Package
         shell: pwsh
         run: |
