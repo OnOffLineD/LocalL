@@ -29,7 +29,7 @@ class Searcher:
 
         self.torch = torch
         self.cfg, self.db_path = cfg, str(db_path)
-        self.emb = Embedder(cfg, images=False)
+        self.emb = Embedder(cfg, images=True)
         self.emb.query("예열")  # 첫 추론은 1초 가까이 걸리므로 미리 한 번 돌려 둔다
         self.lock = threading.Lock()
         self.version, self.checked = None, 0.0
@@ -212,6 +212,70 @@ class Searcher:
     def _fts_text(self, con, row):
         r = con.execute("SELECT text FROM fts WHERE rowid=?", (int(self.vec_ids[row]),)).fetchone()
         return r[0] if r else ""
+
+    def search_image(self, image_input, n: int = 30) -> list[dict]:
+        import os
+        from PIL import Image, ImageOps
+
+        try:
+            if isinstance(image_input, (str, os.PathLike)):
+                if not os.path.exists(image_input):
+                    return []
+                with Image.open(image_input) as im:
+                    pil_im = ImageOps.exif_transpose(im).convert("RGB")
+                    pil_im.thumbnail((896, 896))
+            else:
+                pil_im = ImageOps.exif_transpose(image_input).convert("RGB")
+                pil_im.thumbnail((896, 896))
+        except Exception:
+            return []
+
+        with self.lock:
+            self._maybe_reload()
+            if self.M is None:
+                return []
+            torch = self.torch
+            qv = torch.from_numpy(self.emb.images([pil_im])[0]).to(self.M.device, self.M.dtype)
+            raw = (self.M @ qv).float()
+            n_files = len(self.uniq)
+
+            is_image = self.row_kind_t == VKIND["image"]
+            if not is_image.any():
+                return []
+            img_sims = raw.masked_fill(~is_image, -2.0)
+
+            zeros = torch.full((n_files,), -2.0, device=raw.device)
+            per_file = zeros.scatter_reduce(0, self.row_file_t, img_sims, "amax")
+
+            vals, idxs = torch.topk(per_file, min(n * 2, n_files))
+            results = []
+            for val, fi in zip(vals.tolist(), idxs.tolist()):
+                if val < 0.25 or len(results) >= n:
+                    break
+                fid = int(self.uniq[fi])
+                path, name, ext, fkind, size, mtime = self.files[fid]
+                if not os.path.exists(path):
+                    continue
+
+                pct = int(round(val * 100))
+                if val >= 0.97:
+                    match_type = "same_image"
+                    snippet = f"유사도 {pct}% · 같은 사진"
+                elif val >= 0.85:
+                    match_type = "very_similar"
+                    snippet = f"유사도 {pct}% · 매우 유사"
+                else:
+                    match_type = "image"
+                    snippet = f"유사도 {pct}% · 비슷한 사진"
+
+                results.append({
+                    "id": fid, "name": name, "path": path, "dir": os.path.dirname(path),
+                    "kind": fkind, "ext": ext, "size": size, "mtime": mtime,
+                    "score": round(val, 3), "match": match_type, "snippet": snippet,
+                    "runnable": ext in RUNNABLE_EXTS,
+                    "thumb": True,
+                })
+            return results
 
     def info(self, file_id: int):
         """(path, name, ext, kind, size, mtime) 또는 None. 색인에 있는 파일만 열 수 있다."""

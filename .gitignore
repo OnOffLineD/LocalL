@@ -21,3 +21,9 @@ __pycache__/
 .idea/
 Thumbs.db
 Desktop.ini
+
+# Rust 빌드 산출물
+target/
+
+# 배포용 모음
+dist/
