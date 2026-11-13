@@ -1,6 +1,6 @@
 [package]
 name = "locall"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["OnOffLineD <OnOffLineD@users.noreply.github.com>"]
 description = "High-performance portable desktop AI search tool in Rust"
