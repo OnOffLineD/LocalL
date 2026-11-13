@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
 use anyhow::{anyhow, Result};
-use locall::config::{base_dir, default_db_path, is_image_content_ext, load_config, Config};
+use locall::config::{base_dir, default_db_path, is_image_content_ext, load_config, Config, PathList};
 use locall::embed::{find_python, Embedder, ImageWorker};
 use locall::hotkey::HotkeyManager;
 use locall::search::{SearchResult, Searcher};
@@ -64,6 +64,26 @@ enum IpcMessage {
     CheckUpdate,
     #[serde(rename = "install_update")]
     InstallUpdate,
+    #[serde(rename = "get_folders")]
+    GetFolders,
+    /// 폴더 선택 대화상자로 골라 목록에 더한다
+    #[serde(rename = "pick_folder")]
+    PickFolder { list: PathList },
+    /// 경로를 바로 더한다 (드라이브 칩)
+    #[serde(rename = "add_path")]
+    AddPath { list: PathList, path: String },
+    /// 설정 파일에 적힌 그대로의 항목(raw)을 뺀다
+    #[serde(rename = "remove_path")]
+    RemovePath { list: PathList, raw: String },
+}
+
+/// 검색 폴더·제외 폴더 편집 요청
+#[derive(Debug)]
+enum FolderOp {
+    Get,
+    Pick(PathList),
+    Add(PathList, String),
+    Remove(PathList, String),
 }
 
 #[derive(Debug)]
@@ -86,6 +106,9 @@ enum UserEvent {
     UpdateProgress(String),
     UpdateInstalled,
     UpdateFailed(String),
+    Folders(FolderOp),
+    /// 폴더 목록 화면 (바뀐 게 있었는지와 함께)
+    FoldersView { view: serde_json::Value, changed: bool },
 }
 
 /// 설정 메뉴의 "업데이트" 항목에 보일 상태
@@ -336,6 +359,149 @@ fn pick_image_file(owner: windows::Win32::Foundation::HWND) -> Option<String> {
     }
 }
 
+/// 폴더 선택 대화상자 (여러 개, 드라이브도 고를 수 있다). 취소하면 빈 목록.
+fn pick_folders(owner: windows::Win32::Foundation::HWND, title: &str) -> Vec<String> {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        FileOpenDialog, IFileOpenDialog, FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
+        FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+    };
+
+    let mut out = Vec::new();
+    unsafe {
+        // 창 스레드는 이미 COM이 켜져 있다 (WebView2). 한 번 더 불러도 해가 없다.
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let dialog: IFileOpenDialog = match CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER) {
+            Ok(d) => d,
+            Err(_) => return out,
+        };
+        let opts = dialog.GetOptions().unwrap_or_default();
+        let _ = dialog.SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_ALLOWMULTISELECT | FOS_PATHMUSTEXIST);
+        let _ = dialog.SetTitle(&HSTRING::from(title));
+        // 취소하면 Err(ERROR_CANCELLED)
+        if dialog.Show(owner).is_err() {
+            return out;
+        }
+        let Ok(items) = dialog.GetResults() else { return out };
+        for i in 0..items.GetCount().unwrap_or(0) {
+            let Ok(item) = items.GetItemAt(i) else { continue };
+            if let Ok(name) = item.GetDisplayName(SIGDN_FILESYSPATH) {
+                if let Ok(path) = name.to_string() {
+                    out.push(path);
+                }
+                CoTaskMemFree(Some(name.0 as *const _));
+            }
+        }
+    }
+    out
+}
+
+/// 설정 화면의 "검색 폴더 관리" 내용. 폴더가 있는지 확인하는 데 시간이 걸릴 수 있어
+/// (끊긴 네트워크 드라이브 등) 창 스레드가 아닌 곳에서 부른다.
+fn folders_view(cfg: &Config, error: Option<String>) -> serde_json::Value {
+    use locall::config::read_list;
+    use locall::scan::{detect_cloud_paths, is_under, list_drives, norm_path};
+
+    let cloud = detect_cloud_paths(cfg);
+    let mut error = error;
+    let mut read = |list| {
+        read_list(list).unwrap_or_else(|e| {
+            error.get_or_insert_with(|| format!("{:#}", e));
+            Vec::new()
+        })
+    };
+    let roots = read(PathList::Roots);
+    let excludes = read(PathList::Excludes);
+    let root_norms: Vec<String> = roots.iter().filter(|r| !r.path.is_empty()).map(|r| norm_path(&r.path)).collect();
+
+    let roots_json: Vec<_> = roots
+        .iter()
+        .map(|r| {
+            let n = norm_path(&r.path);
+            let status = if r.path.is_empty() {
+                "unresolved"
+            } else if is_under(&n, &cloud) {
+                "cloud"
+            } else if !Path::new(&r.path).is_dir() {
+                "missing"
+            } else {
+                "ok"
+            };
+            let tag = match r.raw.as_str() {
+                "<current_drive>" | "<drive>" | "%DRIVE%" => "install",
+                "<project>" | "." => "project",
+                _ => "",
+            };
+            serde_json::json!({ "raw": r.raw, "path": r.path, "status": status, "tag": tag })
+        })
+        .collect();
+
+    let excludes_json: Vec<_> = excludes
+        .iter()
+        .map(|x| {
+            let n = norm_path(&x.path);
+            // 어떤 검색 폴더와도 겹치지 않으면(안에도, 위에도 없으면) 효과가 없다
+            let overlaps = root_norms.iter().any(|r| is_under(&n, std::slice::from_ref(r)) || is_under(r, std::slice::from_ref(&n)));
+            let status = if x.path.is_empty() {
+                "unresolved"
+            } else if !overlaps {
+                "outside"
+            } else if !Path::new(&x.path).is_dir() {
+                "missing"
+            } else {
+                "ok"
+            };
+            serde_json::json!({ "raw": x.raw, "path": x.path, "status": status })
+        })
+        .collect();
+
+    // 아직 검색 폴더가 아닌 드라이브만 (클라우드 가상 드라이브 제외)
+    let drives: Vec<_> = list_drives()
+        .into_iter()
+        .filter(|d| {
+            let n = norm_path(&d.path);
+            !is_under(&n, &cloud) && !root_norms.iter().any(|r| r.trim_end_matches('\\') == n.trim_end_matches('\\'))
+        })
+        .collect();
+
+    serde_json::json!({
+        "roots": roots_json,
+        "excludes": excludes_json,
+        "drives": drives,
+        "error": error,
+    })
+}
+
+/// 폴더 목록을 고치고(또는 읽기만 하고) 결과 화면을 창으로 보낸다. 다른 스레드에서 돈다.
+fn spawn_folder_job(proxy: EventLoopProxy<UserEvent>, cfg: Config, op: FolderOp, picked: Vec<String>) {
+    use locall::config::{add_path, remove_path};
+    thread::spawn(move || {
+        let mut changed = false;
+        let mut error = None;
+        let mut apply = |r: Result<bool>| match r {
+            Ok(c) => changed |= c,
+            Err(e) => {
+                error.get_or_insert_with(|| format!("{:#}", e));
+            }
+        };
+        match op {
+            FolderOp::Get => {}
+            FolderOp::Pick(list) => {
+                for p in &picked {
+                    apply(add_path(list, p));
+                }
+            }
+            FolderOp::Add(list, path) => apply(add_path(list, &path)),
+            FolderOp::Remove(list, raw) => apply(remove_path(list, &raw)),
+        }
+        let view = folders_view(&cfg, error);
+        let _ = proxy.send_event(UserEvent::FoldersView { view, changed });
+    });
+}
+
 fn run_query(searcher: &Searcher, embedder: &mut Option<Embedder>, query: &Query) -> Result<Vec<SearchResult>> {
     match query {
         Query::Text { query, kind } => {
@@ -531,6 +697,8 @@ fn run_app() -> Result<()> {
 
     let cfg = load_config(None)?;
     let db_path = default_db_path();
+    // 폴더 화면에서 클라우드 폴더를 알아볼 때 쓴다 (검색 폴더 목록 자체는 매번 설정 파일에서 읽는다)
+    let cfg_for_folders = cfg.clone();
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -720,6 +888,18 @@ fn run_app() -> Result<()> {
                     IpcMessage::InstallUpdate => {
                         let _ = proxy_for_ipc.send_event(UserEvent::InstallUpdate);
                     }
+                    IpcMessage::GetFolders => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::Folders(FolderOp::Get));
+                    }
+                    IpcMessage::PickFolder { list } => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::Folders(FolderOp::Pick(list)));
+                    }
+                    IpcMessage::AddPath { list, path } => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::Folders(FolderOp::Add(list, path)));
+                    }
+                    IpcMessage::RemovePath { list, raw } => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::Folders(FolderOp::Remove(list, raw)));
+                    }
                 }
             }
         })
@@ -733,6 +913,8 @@ fn run_app() -> Result<()> {
     // 새 버전 확인: 창이 뜨고 조금 뒤에 백그라운드에서
     let mut update_view = UpdateView { version: update::VERSION, status: "checking", latest: None, message: String::new() };
     let mut pending_release: Option<Release> = None;
+    // 검색 폴더를 바꾼 뒤 아직 색인을 갱신하지 않았으면 true
+    let mut folders_changed = false;
     spawn_update_check(proxy.clone(), Duration::from_secs(5), false);
 
     // 4. 이벤트 루프 실행
@@ -815,6 +997,7 @@ fn run_app() -> Result<()> {
                 }
                 UserEvent::RunIndex => {
                     use std::os::windows::process::CommandExt;
+                    folders_changed = false;
                     const CREATE_NEW_CONSOLE: u32 = 0x00000010;
 
                     // Rust 색인기가 파일명·본문·PDF·사진을 모두 한다. 파이썬이 함께 있으면 Rust가
@@ -862,10 +1045,12 @@ fn run_app() -> Result<()> {
                     }
                 }
                 UserEvent::GetConfig => {
+                    let count = |list| locall::config::read_list(list).map(|v| v.len()).ok();
                     let cfg = serde_json::json!({
                         "hotkey": current_hotkey,
                         "autostart": autostart::is_enabled(),
                         "update": update_view,
+                        "folders": { "roots": count(PathList::Roots), "excludes": count(PathList::Excludes) },
                     });
                     let js = format!(
                         "window.onConfigLoaded({}); window.setStatus({});",
@@ -963,6 +1148,33 @@ fn run_app() -> Result<()> {
                             set_status(&webview, &mut current_status, update_view.message.clone());
                         }
                     }
+                }
+                UserEvent::Folders(op) => {
+                    let picked = if let FolderOp::Pick(list) = &op {
+                        use tao::platform::windows::WindowExtWindows;
+                        use windows::Win32::Foundation::HWND;
+
+                        let title = match list {
+                            PathList::Roots => "검색할 폴더 선택",
+                            PathList::Excludes => "검색에서 뺄 폴더 선택",
+                        };
+                        last_shown = Instant::now();
+                        let picked = pick_folders(HWND(window.hwnd() as _), title);
+                        // 대화상자 때문에 잃은 포커스로 창이 숨지 않게 한다
+                        last_shown = Instant::now();
+                        window.set_visible(true);
+                        window.set_focus();
+                        picked
+                    } else {
+                        Vec::new()
+                    };
+                    spawn_folder_job(proxy.clone(), cfg_for_folders.clone(), op, picked);
+                }
+                UserEvent::FoldersView { mut view, changed } => {
+                    folders_changed |= changed;
+                    view["changed"] = serde_json::json!(folders_changed);
+                    let js = format!("window.onFoldersLoaded && window.onFoldersLoaded({});", view);
+                    let _ = webview.evaluate_script(&js);
                 }
                 UserEvent::UpdateFailed(e) => {
                     update_view.status = if pending_release.is_some() { "available" } else { "error" };

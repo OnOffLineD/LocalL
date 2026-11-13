@@ -70,8 +70,16 @@ def walk(roots: list[str], cfg: dict, report: dict):
     report.setdefault("denied", 0)
 
     stack = []
+    # 다른 루트 안에 든 루트(예: D:\ 와 D:\사진)는 그 루트로서 한 번만 훑는다
+    root_keys = set()
     for root in roots:
-        if _is_under(_norm(root), cloud):
+        root_n = _norm(root)
+        if root_n.rstrip("\\") in root_keys:
+            continue  # 같은 루트가 두 번 적힘
+        root_keys.add(root_n.rstrip("\\"))
+        if _is_under(root_n, excluded):
+            continue  # 루트 자체(또는 그 위 폴더)를 제외했다
+        if _is_under(root_n, cloud):
             report["cloud"].append(root)
         elif os.path.isdir(root):
             stack.append(root)
@@ -111,7 +119,8 @@ def walk(roots: list[str], cfg: dict, report: dict):
                 if _is_under(path_n, cloud) or lname in cloud_names or lname.startswith("onedrive - "):
                     report["cloud"].append(e.path)
                     continue
-                stack.append(e.path)
+                if path_n not in root_keys:
+                    stack.append(e.path)
                 if "dir" in kinds:
                     yield e.path, e.name, True, "", "dir", 0, st.st_mtime
             else:

@@ -30,7 +30,9 @@ def name_text(path: str, name: str, kind: str) -> str:
     return doc_text(name, f"{KIND_LABEL.get(kind, '파일')} {stem}. 위치: {' > '.join(parents)}")
 
 
-def scan_phase(con, cfg, roots):
+def scan_phase(con, cfg, roots, prune_outside=False):
+    """prune_outside: 설정의 검색 폴더 전체로 도는 중이면 True. 그러면 어느 검색 폴더에도 속하지 않는
+    항목(검색 폴더 목록에서 뺀 폴더의 파일)도 색인에서 지운다. --root로 일부만 돌 때는 False."""
     existing = {r[1]: r for r in con.execute("SELECT id, path, size, mtime FROM files")}
     seen, report, kinds = set(), {}, Counter()
     new = changed = 0
@@ -63,14 +65,24 @@ def scan_phase(con, cfg, roots):
         for r in roots
         if os.path.isdir(r) or os.path.normcase(r) in cloud_roots
     ]
-    removed = 0
+    # 지금 없는 검색 폴더(뽑힌 USB 등)도 포함: 그 파일은 다시 꽂을 때를 위해 남겨 둔다
+    all_roots = tuple(os.path.normcase(r).rstrip("\\") + "\\" for r in roots)
+    prune_outside = prune_outside and bool(all_roots)
+    removed = outside = 0
     for path, row in existing.items():
-        if row[0] not in seen and (os.path.normcase(path) + "\\").startswith(tuple(live)):
+        if row[0] in seen:
+            continue
+        path_n = os.path.normcase(path) + "\\"
+        if path_n.startswith(tuple(live)):
             store.remove_file(con, row[0])
             removed += 1
+        elif prune_outside and not path_n.startswith(all_roots):
+            store.remove_file(con, row[0])
+            outside += 1
     con.commit()
 
-    log(f"[훑기] {sum(kinds.values()):,}개 확인 ({time.time() - t0:.0f}초) · 새로 {new:,} · 변경 {changed:,} · 삭제 {removed:,}")
+    extra = f" · 검색 폴더 밖 정리 {outside:,}" if outside else ""
+    log(f"[훑기] {sum(kinds.values()):,}개 확인 ({time.time() - t0:.0f}초) · 새로 {new:,} · 변경 {changed:,} · 삭제 {removed:,}{extra}")
     log("       " + " · ".join(f"{KIND_LABEL.get(k, k)} {v:,}" for k, v in kinds.most_common()))
     for p in report["cloud"]:
         log(f"       클라우드라서 건너뜀: {p}")
@@ -248,7 +260,7 @@ def main():
     con.commit()
 
     try:
-        scan_phase(con, cfg, roots)
+        scan_phase(con, cfg, roots, prune_outside=not args.root)
         if args.scan_only:
             pending = con.execute(
                 "SELECT kind, COUNT(*) FROM files WHERE content_state=0 GROUP BY kind"

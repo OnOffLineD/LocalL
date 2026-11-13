@@ -654,6 +654,164 @@
     cursor: not-allowed;
   }
 
+  /* 검색 폴더 관리 */
+  .modal-card.folders-card {
+    width: 560px;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+    gap: 12px;
+  }
+  .modal-card.folders-card.busy .folder-action,
+  .modal-card.folders-card.busy .folder-remove,
+  .modal-card.folders-card.busy .drive-chip {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .folder-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .folder-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #CBD5E1;
+  }
+  .folder-action {
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    color: #7DD3FC;
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .folder-action:hover {
+    background: rgba(56, 189, 248, 0.16);
+    color: #E0F2FE;
+  }
+  .folder-desc {
+    font-size: 11px;
+    color: #64748B;
+  }
+  .folder-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 150px;
+    overflow-y: auto;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 4px;
+  }
+  .folder-list.short {
+    max-height: 96px;
+  }
+  .folder-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: 6px;
+  }
+  .folder-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .folder-row > img {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.8;
+  }
+  .folder-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: #E2E8F0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .folder-row.dim .folder-path {
+    color: #64748B;
+  }
+  .folder-badge {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #94A3B8;
+  }
+  .folder-badge.warn {
+    background: rgba(251, 191, 36, 0.12);
+    color: #FBBF24;
+  }
+  .folder-remove {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 3px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    opacity: 0.45;
+    transition: all 0.12s;
+  }
+  .folder-remove:hover {
+    opacity: 1;
+    background: rgba(239, 68, 68, 0.15);
+  }
+  .folder-remove img {
+    width: 12px;
+    height: 12px;
+  }
+  .folder-empty {
+    font-size: 11.5px;
+    color: #64748B;
+    padding: 8px 6px;
+  }
+  .drive-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #64748B;
+  }
+  .drive-chip {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #CBD5E1;
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+  .drive-chip:hover {
+    border-color: rgba(56, 189, 248, 0.5);
+    color: #F1F5F9;
+  }
+  .drive-chip .drive-kind {
+    color: #64748B;
+    margin-left: 4px;
+  }
+  .folders-note {
+    font-size: 11.5px;
+    color: #38BDF8;
+    display: none;
+  }
+  .folders-note.show {
+    display: block;
+  }
+
   /* 빈 상태 */
   .empty-state {
     flex: 1;
@@ -756,6 +914,15 @@
         <div class="menu-arrow">›</div>
       </div>
 
+      <div class="settings-menu-item" id="menu-folders">
+        <div class="menu-icon"><img src="assets/icon_folder.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">검색 폴더 관리</div>
+          <div class="menu-sub" id="display-folders">검색할 폴더·드라이브, 제외 폴더</div>
+        </div>
+        <div class="menu-arrow">›</div>
+      </div>
+
       <div class="settings-menu-item" id="menu-reindex">
         <div class="menu-icon"><img src="assets/icon_refresh.svg" alt="" /></div>
         <div class="menu-info">
@@ -810,6 +977,38 @@
       </div>
     </div>
   </div>
+
+  <!-- 검색 폴더 관리 모달 -->
+  <div class="modal-overlay" id="modal-folders">
+    <div class="modal-card folders-card" id="folders-card">
+      <div class="modal-header">검색 폴더 관리</div>
+
+      <div class="folder-section">
+        <div class="folder-section-head">
+          <span>검색 폴더</span>
+          <button class="folder-action" data-pick="roots">+ 폴더 추가…</button>
+        </div>
+        <div class="folder-list" id="list-roots"></div>
+        <div class="drive-chips" id="drive-chips"></div>
+      </div>
+
+      <div class="folder-section">
+        <div class="folder-section-head">
+          <span>제외 폴더</span>
+          <button class="folder-action" data-pick="exclude">+ 제외 폴더 추가…</button>
+        </div>
+        <div class="folder-desc">고른 폴더와 그 안의 모든 파일이 검색에서 빠집니다.</div>
+        <div class="folder-list short" id="list-excludes"></div>
+      </div>
+
+      <div class="modal-error" id="folders-error" style="display: none;"></div>
+      <div class="folders-note" id="folders-note">바꾼 내용은 색인을 갱신해야 검색에 반영됩니다.</div>
+      <div class="modal-buttons">
+        <button class="modal-btn secondary" id="btn-close-folders">닫기 (Esc)</button>
+        <button class="modal-btn primary" id="btn-folders-reindex">색인 갱신</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -858,6 +1057,9 @@
 
   // 포커스 강제 함수 (마우스 클릭 없이 즉시 타이핑)
   window.focusInput = function() {
+    // 검색 폴더 관리 창이 열려 있으면 뒤의 검색창으로 글자가 들어가지 않게 한다
+    const folders = document.getElementById("modal-folders");
+    if (folders && folders.classList.contains("open")) return;
     if (input) {
       input.focus();
       input.select();
@@ -1163,6 +1365,7 @@
     }
     if (cfg && typeof cfg.autostart === "boolean") setAutostartView(cfg.autostart);
     if (cfg && cfg.update) window.onUpdateState(cfg.update);
+    if (cfg && cfg.folders) setFoldersSummary(cfg.folders.roots, cfg.folders.excludes);
   };
 
   // --- PC 시작 시 자동 실행 ---
@@ -1246,6 +1449,130 @@
     } else {
       postToRust({ type: "check_update" });
     }
+  });
+
+  // --- 검색 폴더 관리 ---
+  const menuFolders = document.getElementById("menu-folders");
+  const displayFolders = document.getElementById("display-folders");
+  const modalFolders = document.getElementById("modal-folders");
+  const foldersCard = document.getElementById("folders-card");
+  const listRoots = document.getElementById("list-roots");
+  const listExcludes = document.getElementById("list-excludes");
+  const driveChips = document.getElementById("drive-chips");
+  const foldersError = document.getElementById("folders-error");
+  const foldersNote = document.getElementById("folders-note");
+
+  function setFoldersSummary(roots, excludes) {
+    if (typeof roots !== "number") return;
+    displayFolders.textContent = "폴더 " + roots + "개" + (excludes ? " · 제외 " + excludes + "개" : "");
+  }
+
+  function openFoldersModal() {
+    toggleSettings(false);
+    modalFolders.classList.add("open");
+    foldersCard.classList.add("busy");
+    postToRust({ type: "get_folders" });
+  }
+
+  function closeFoldersModal() {
+    modalFolders.classList.remove("open");
+    window.focusInput();
+  }
+
+  menuFolders.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openFoldersModal();
+  });
+
+  const ROOT_BADGES = {
+    missing: ["없음", "warn"],
+    cloud: ["클라우드 · 건너뜀", "warn"],
+    unresolved: ["찾을 수 없음", "warn"],
+  };
+  const EXCLUDE_BADGES = {
+    outside: ["검색 폴더 밖", "warn"],
+    missing: ["없음", "warn"],
+    unresolved: ["찾을 수 없음", "warn"],
+  };
+  const TAG_BADGES = { install: "설치 드라이브", project: "LocalL 폴더" };
+  const DRIVE_KINDS = { removable: "이동식", remote: "네트워크", ramdisk: "램디스크" };
+
+  function folderRow(item, list) {
+    const shown = item.path || item.raw;
+    const badges = [];
+    if (list === "roots" && TAG_BADGES[item.tag]) badges.push([TAG_BADGES[item.tag], ""]);
+    const st = (list === "roots" ? ROOT_BADGES : EXCLUDE_BADGES)[item.status];
+    if (st) badges.push(st);
+    const badgeHtml = badges
+      .map(([text, cls]) => `<span class="folder-badge ${cls}">${escapeHtml(text)}</span>`)
+      .join("");
+    const removeTitle = list === "roots" ? "검색 폴더에서 빼기" : "제외 목록에서 빼기 (다시 검색에 포함)";
+    return `<div class="folder-row${item.status && item.status !== "ok" ? " dim" : ""}">
+        <img src="assets/icon_folder.svg" alt="" />
+        <div class="folder-path" title="${escapeHtml(shown)}">${escapeHtml(shown)}</div>
+        ${badgeHtml}
+        <button class="folder-remove" data-list="${list}" data-raw="${escapeHtml(item.raw)}" title="${removeTitle}">
+          <img src="assets/icon_close.svg" alt="" />
+        </button>
+      </div>`;
+  }
+
+  // Rust 콜백: { roots:[{raw,path,status,tag}], excludes:[{raw,path,status}], drives:[{path,label,kind}], changed, error }
+  window.onFoldersLoaded = function(v) {
+    v = v || {};
+    const roots = v.roots || [];
+    const excludes = v.excludes || [];
+    const drives = v.drives || [];
+    foldersCard.classList.remove("busy");
+
+    listRoots.innerHTML = roots.length
+      ? roots.map((r) => folderRow(r, "roots")).join("")
+      : `<div class="folder-empty">검색 폴더가 없습니다. 폴더나 드라이브를 추가하세요.</div>`;
+    listExcludes.innerHTML = excludes.length
+      ? excludes.map((x) => folderRow(x, "exclude")).join("")
+      : `<div class="folder-empty">제외한 폴더가 없습니다.</div>`;
+    driveChips.innerHTML = drives.length
+      ? "<span>드라이브 추가:</span>" +
+        drives
+          .map((d) => {
+            const name = d.path + (d.label ? " " + d.label : "");
+            const kind = DRIVE_KINDS[d.kind] ? `<span class="drive-kind">${DRIVE_KINDS[d.kind]}</span>` : "";
+            return `<button class="drive-chip" data-drive="${escapeHtml(d.path)}" title="${escapeHtml(d.path)} 전체를 검색 폴더에 추가">${escapeHtml(name)}${kind}</button>`;
+          })
+          .join("")
+      : "";
+
+    foldersError.textContent = v.error || "";
+    foldersError.style.display = v.error ? "block" : "none";
+    foldersNote.classList.toggle("show", !!v.changed);
+    setFoldersSummary(roots.length, excludes.length);
+  };
+
+  foldersCard.addEventListener("click", (e) => {
+    const pick = e.target.closest("[data-pick]");
+    if (pick) {
+      foldersCard.classList.add("busy");
+      postToRust({ type: "pick_folder", list: pick.dataset.pick });
+      return;
+    }
+    const drive = e.target.closest("[data-drive]");
+    if (drive) {
+      foldersCard.classList.add("busy");
+      postToRust({ type: "add_path", list: "roots", path: drive.dataset.drive });
+      return;
+    }
+    const remove = e.target.closest(".folder-remove");
+    if (remove) {
+      foldersCard.classList.add("busy");
+      postToRust({ type: "remove_path", list: remove.dataset.list, raw: remove.dataset.raw });
+    }
+  });
+
+  document.getElementById("btn-close-folders").addEventListener("click", closeFoldersModal);
+  document.getElementById("btn-folders-reindex").addEventListener("click", () => {
+    foldersNote.classList.remove("show");
+    closeFoldersModal();
+    postToRust({ type: "run_index" });
   });
 
   // 단축키 레코딩 키 핸들러
@@ -1334,6 +1661,15 @@
   function handleKeyDown(e) {
     if (isRecordingHotkey) {
       handleHotkeyRecording(e);
+      return;
+    }
+
+    // 검색 폴더 관리 창: Esc는 창만 닫고, 나머지 키(Tab·Enter 등)는 창 안의 버튼에 맡긴다
+    if (modalFolders.classList.contains("open")) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeFoldersModal();
+      }
       return;
     }
 
