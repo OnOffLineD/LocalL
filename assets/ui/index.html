@@ -479,12 +479,70 @@
   .menu-sub {
     font-size: 11px;
     color: #64748B;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .menu-arrow {
     color: #475569;
     font-size: 15px;
     font-weight: 300;
+  }
+
+  /* 켜기/끄기 스위치 */
+  .toggle-switch {
+    position: relative;
+    width: 34px;
+    height: 19px;
+    flex-shrink: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    transition: background 0.15s;
+  }
+  .toggle-switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #CBD5E1;
+    transition: transform 0.15s, background 0.15s;
+  }
+  .toggle-switch.on {
+    background: rgba(56, 189, 248, 0.75);
+  }
+  .toggle-switch.on::after {
+    transform: translateX(15px);
+    background: #FFFFFF;
+  }
+  .settings-menu-item.busy {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+  .menu-sub.highlight {
+    color: #38BDF8;
+  }
+  .menu-sub.error {
+    color: #F87171;
+  }
+
+  /* 새 버전이 있으면 설정 버튼에 점 */
+  .footer-settings {
+    position: relative;
+  }
+  .footer-settings.has-update::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #38BDF8;
+    box-shadow: 0 0 0 2px rgba(18, 22, 34, 0.96);
   }
 
   .settings-menu-divider {
@@ -703,6 +761,24 @@
         <div class="menu-info">
           <div class="menu-label">색인 만들기 / 갱신</div>
           <div class="menu-sub">새 창에서 인덱서 실행</div>
+        </div>
+        <div class="menu-arrow">›</div>
+      </div>
+
+      <div class="settings-menu-item" id="menu-autostart" role="switch" aria-checked="false">
+        <div class="menu-icon"><img src="assets/icon_startup.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">PC 시작 시 자동 실행</div>
+          <div class="menu-sub" id="display-autostart">꺼짐</div>
+        </div>
+        <div class="toggle-switch" id="toggle-autostart"></div>
+      </div>
+
+      <div class="settings-menu-item" id="menu-update">
+        <div class="menu-icon"><img src="assets/icon_update.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">업데이트</div>
+          <div class="menu-sub" id="display-update">확인 중…</div>
         </div>
         <div class="menu-arrow">›</div>
       </div>
@@ -1085,7 +1161,92 @@
       currentHotkey = cfg.hotkey;
       displayHotkey.textContent = "현재: " + formatHotkey(currentHotkey);
     }
+    if (cfg && typeof cfg.autostart === "boolean") setAutostartView(cfg.autostart);
+    if (cfg && cfg.update) window.onUpdateState(cfg.update);
   };
+
+  // --- PC 시작 시 자동 실행 ---
+  const menuAutostart = document.getElementById("menu-autostart");
+  const toggleAutostart = document.getElementById("toggle-autostart");
+  const displayAutostart = document.getElementById("display-autostart");
+  let autostartOn = false;
+
+  function setAutostartView(on) {
+    autostartOn = on;
+    toggleAutostart.classList.toggle("on", on);
+    menuAutostart.setAttribute("aria-checked", on ? "true" : "false");
+    displayAutostart.textContent = on ? "켜짐 · 켤 때 창 없이 대기" : "꺼짐";
+    displayAutostart.classList.remove("error");
+  }
+
+  menuAutostart.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menuAutostart.classList.add("busy");
+    postToRust({ type: "set_autostart", enabled: !autostartOn });
+  });
+
+  // Rust 콜백: 자동 실행 변경 결과 (enabled: 지금 실제 상태)
+  window.onAutostartUpdated = function(ok, enabled, msg) {
+    menuAutostart.classList.remove("busy");
+    setAutostartView(!!enabled);
+    if (!ok) {
+      displayAutostart.textContent = msg || "변경하지 못했습니다.";
+      displayAutostart.classList.add("error");
+    }
+  };
+
+  // --- 업데이트 ---
+  const menuUpdate = document.getElementById("menu-update");
+  const displayUpdate = document.getElementById("display-update");
+  let updateState = { status: "checking" };
+
+  // Rust 콜백: 업데이트 상태 { version, status, latest, message }
+  window.onUpdateState = function(state) {
+    updateState = state || {};
+    const cur = updateState.version ? "현재 v" + updateState.version : "";
+    let text = cur;
+    let cls = "";
+    switch (updateState.status) {
+      case "checking":
+        text = cur + " · 확인 중…";
+        break;
+      case "latest":
+        text = cur + " · 최신 버전";
+        break;
+      case "available":
+        text = "새 버전 v" + updateState.latest + " · 눌러서 설치";
+        cls = "highlight";
+        if (updateState.message) {
+          text = updateState.message;
+          cls = "error";
+        }
+        break;
+      case "downloading":
+        text = updateState.message || "받는 중…";
+        cls = "highlight";
+        break;
+      case "error":
+        text = updateState.message || "확인하지 못했습니다";
+        cls = "error";
+        break;
+      default:
+        text = cur + " · 눌러서 확인";
+    }
+    displayUpdate.textContent = text;
+    displayUpdate.title = text;
+    displayUpdate.className = "menu-sub" + (cls ? " " + cls : "");
+    menuUpdate.classList.toggle("busy", updateState.status === "checking" || updateState.status === "downloading");
+    document.getElementById("btn-settings").classList.toggle("has-update", updateState.status === "available");
+  };
+
+  menuUpdate.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (updateState.status === "available") {
+      postToRust({ type: "install_update" });
+    } else {
+      postToRust({ type: "check_update" });
+    }
+  });
 
   // 단축키 레코딩 키 핸들러
   function handleHotkeyRecording(e) {

@@ -1,0 +1,57 @@
+# v로 시작하는 태그(예: v0.2.0)를 푸시하면 Windows용 배포 zip을 빌드해 GitHub Release로 올린다.
+# 앱(locall.exe)은 시작할 때 최신 Release를 확인하고, 사용자가 누르면 이 zip으로 업데이트한다.
+#
+# 새 버전 내는 순서:
+#   1. Cargo.toml의 version을 올린다 (예: 0.2.0)  2. 커밋·푸시
+#   3. git tag v0.2.0 && git push origin v0.2.0
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches Cargo.toml version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($tag -ne $ver) {
+            Write-Error "Tag v$tag does not match Cargo.toml version $ver. Bump Cargo.toml first."
+            exit 1
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --bins --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "dist/LocalL"
+          New-Item -ItemType Directory -Force "$out/assets/ui", "$out/locall/assets" | Out-Null
+          Copy-Item target/release/locall.exe, target/release/locall-index.exe, target/release/locall-search.exe $out
+          Copy-Item assets/ui/* "$out/assets/ui"
+          Copy-Item config.json, LocalL_Rust.bat, LocalL.bat, index.bat, requirements.txt $out
+          Copy-Item locall/*.py "$out/locall"
+          Copy-Item locall/assets/* "$out/locall/assets"
+          Compress-Archive -Path "$out/*" -DestinationPath dist/LocalL-windows-x64.zip
+          $hash = (Get-FileHash dist/LocalL-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path dist/LocalL-windows-x64.zip.sha256 -Value "$hash  LocalL-windows-x64.zip" -Encoding ascii -NoNewline
+          Get-ChildItem dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/LocalL-windows-x64.zip dist/LocalL-windows-x64.zip.sha256 --title "LocalL ${{ github.ref_name }}" --generate-notes

@@ -166,7 +166,7 @@ fn acquire_lock(dir: &Path, progress: &mut dyn FnMut(Progress)) -> Result<File> 
     }
 }
 
-fn make_agent() -> ureq::Agent {
+pub(crate) fn make_agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .user_agent("LocalL")
         .timeout_connect(Some(Duration::from_secs(20)))

@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod config;
 pub mod download;
 pub mod embed;
@@ -7,3 +8,4 @@ pub mod scan;
 pub mod search;
 pub mod store;
 pub mod thumb;
+pub mod update;

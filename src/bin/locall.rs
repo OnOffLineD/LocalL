@@ -5,7 +5,9 @@ use locall::config::{base_dir, default_db_path, is_image_content_ext, load_confi
 use locall::embed::{find_python, Embedder, ImageWorker};
 use locall::hotkey::HotkeyManager;
 use locall::search::{SearchResult, Searcher};
-use serde::Deserialize;
+use locall::update::{self, Release};
+use locall::autostart;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,6 +58,12 @@ enum IpcMessage {
     Quit,
     #[serde(rename = "get_config")]
     GetConfig,
+    #[serde(rename = "set_autostart")]
+    SetAutostart { enabled: bool },
+    #[serde(rename = "check_update")]
+    CheckUpdate,
+    #[serde(rename = "install_update")]
+    InstallUpdate,
 }
 
 #[derive(Debug)]
@@ -70,6 +78,33 @@ enum UserEvent {
     RunIndex,
     UpdateHotkey(String),
     GetConfig,
+    SetAutostart(bool),
+    CheckUpdate,
+    InstallUpdate,
+    /// 새 버전 확인 결과 (수동 확인이면 오류도 보인다)
+    UpdateChecked { result: Result<Option<Release>, String>, manual: bool },
+    UpdateProgress(String),
+    UpdateInstalled,
+    UpdateFailed(String),
+}
+
+/// 설정 메뉴의 "업데이트" 항목에 보일 상태
+#[derive(Clone, Serialize)]
+struct UpdateView {
+    version: &'static str,
+    /// idle | checking | latest | available | downloading | error
+    status: &'static str,
+    latest: Option<String>,
+    message: String,
+}
+
+/// 백그라운드에서 새 버전을 확인한다 (`delay` 뒤에)
+fn spawn_update_check(proxy: EventLoopProxy<UserEvent>, delay: Duration, manual: bool) {
+    thread::spawn(move || {
+        thread::sleep(delay);
+        let result = update::check().map_err(|e| format!("{:#}", e));
+        let _ = proxy.send_event(UserEvent::UpdateChecked { result, manual });
+    });
 }
 
 #[derive(Clone)]
@@ -448,16 +483,26 @@ fn search_worker(
     }
 }
 
-/// 이미 떠 있으면 false. 반환된 핸들은 프로세스가 끝날 때까지 쥐고 있어야 한다.
-fn single_instance() -> Option<windows::Win32::Foundation::HANDLE> {
+/// 이미 떠 있으면 None. 반환된 핸들은 프로세스가 끝날 때까지 쥐고 있어야 한다.
+/// `wait`이면 (업데이트 직후) 옛 프로세스가 끝나길 최대 10초 기다린다.
+fn single_instance(wait: bool) -> Option<windows::Win32::Foundation::HANDLE> {
     use windows::core::w;
-    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
     use windows::Win32::System::Threading::CreateMutexW;
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
 
     unsafe {
-        let handle = CreateMutexW(None, false, w!("LocalL_rust_single_instance")).ok()?;
-        if GetLastError() == ERROR_ALREADY_EXISTS {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (handle, exists) = loop {
+            let handle = CreateMutexW(None, false, w!("LocalL_rust_single_instance")).ok()?;
+            let exists = GetLastError() == ERROR_ALREADY_EXISTS;
+            if !(wait && exists && Instant::now() < deadline) {
+                break (handle, exists);
+            }
+            let _ = CloseHandle(handle);
+            thread::sleep(Duration::from_millis(200));
+        };
+        if exists {
             MessageBoxW(
                 None,
                 w!("LocalL이 이미 실행 중입니다.\n단축키를 눌러 검색창을 여세요."),
@@ -471,10 +516,18 @@ fn single_instance() -> Option<windows::Win32::Foundation::HANDLE> {
 }
 
 fn run_app() -> Result<()> {
-    let _instance = match single_instance() {
+    let args: Vec<String> = std::env::args().collect();
+    let started_by_autostart = args.iter().any(|a| a == autostart::ARG);
+    let after_update = args.iter().any(|a| a == update::AFTER_UPDATE_ARG);
+    // 업데이트 중에 exe 이름이 바뀌기 전의 경로 (업데이트 뒤 다시 켤 때 쓴다)
+    let exe_path = std::env::current_exe()?;
+
+    let _instance = match single_instance(after_update) {
         Some(h) => h,
         None => return Ok(()),
     };
+    update::cleanup();
+    autostart::refresh_path();
 
     let cfg = load_config(None)?;
     let db_path = default_db_path();
@@ -518,7 +571,9 @@ fn run_app() -> Result<()> {
         .with_transparent(true)   // 투명 창
         .with_always_on_top(true) // 최상위
         .with_resizable(false)
-        .with_inner_size(LogicalSize::new(760.0, 560.0));
+        .with_inner_size(LogicalSize::new(760.0, 560.0))
+        // PC를 켤 때 자동으로 시작됐으면 창은 숨긴 채 단축키만 기다린다
+        .with_visible(!started_by_autostart);
 
     if let Some(icon) = window_icon {
         builder = builder.with_window_icon(Some(icon));
@@ -656,6 +711,15 @@ fn run_app() -> Result<()> {
                     IpcMessage::GetConfig => {
                         let _ = proxy_for_ipc.send_event(UserEvent::GetConfig);
                     }
+                    IpcMessage::SetAutostart { enabled } => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::SetAutostart(enabled));
+                    }
+                    IpcMessage::CheckUpdate => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::CheckUpdate);
+                    }
+                    IpcMessage::InstallUpdate => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::InstallUpdate);
+                    }
                 }
             }
         })
@@ -665,6 +729,11 @@ fn run_app() -> Result<()> {
     let mut last_shown = Instant::now();
     let mut last_hotkey = Instant::now();
     let mut current_status = String::new();
+
+    // 새 버전 확인: 창이 뜨고 조금 뒤에 백그라운드에서
+    let mut update_view = UpdateView { version: update::VERSION, status: "checking", latest: None, message: String::new() };
+    let mut pending_release: Option<Release> = None;
+    spawn_update_check(proxy.clone(), Duration::from_secs(5), false);
 
     // 4. 이벤트 루프 실행
     event_loop.run(move |event, _, control_flow| {
@@ -710,13 +779,7 @@ fn run_app() -> Result<()> {
                     let js = format!("window.renderSearchResults({}, {});", json, seq);
                     let _ = webview.evaluate_script(&js);
                 }
-                UserEvent::Status(text) => {
-                    if text != current_status {
-                        current_status = text;
-                        let js = format!("window.setStatus({});", serde_json::json!(current_status));
-                        let _ = webview.evaluate_script(&js);
-                    }
-                }
+                UserEvent::Status(text) => set_status(&webview, &mut current_status, text),
                 UserEvent::ImageChosen { path, label } => {
                     let js = format!(
                         "window.startImageSearch({}, {});",
@@ -799,12 +862,113 @@ fn run_app() -> Result<()> {
                     }
                 }
                 UserEvent::GetConfig => {
+                    let cfg = serde_json::json!({
+                        "hotkey": current_hotkey,
+                        "autostart": autostart::is_enabled(),
+                        "update": update_view,
+                    });
                     let js = format!(
-                        "window.onConfigLoaded({{ hotkey: {} }}); window.setStatus({});",
-                        serde_json::json!(current_hotkey),
+                        "window.onConfigLoaded({}); window.setStatus({});",
+                        cfg,
                         serde_json::json!(current_status)
                     );
                     let _ = webview.evaluate_script(&js);
+                }
+                UserEvent::SetAutostart(enabled) => {
+                    let js = match autostart::set_enabled(enabled) {
+                        Ok(()) => format!("window.onAutostartUpdated(true, {});", autostart::is_enabled()),
+                        Err(e) => format!(
+                            "window.onAutostartUpdated(false, {}, {});",
+                            autostart::is_enabled(),
+                            serde_json::json!(format!("{:#}", e))
+                        ),
+                    };
+                    let _ = webview.evaluate_script(&js);
+                }
+                UserEvent::CheckUpdate => {
+                    if update_view.status != "checking" && update_view.status != "downloading" {
+                        update_view.status = "checking";
+                        update_view.message.clear();
+                        push_update_view(&webview, &update_view);
+                        spawn_update_check(proxy.clone(), Duration::ZERO, true);
+                    }
+                }
+                UserEvent::UpdateChecked { result, manual } => {
+                    match result {
+                        Ok(Some(rel)) => {
+                            update_view.status = "available";
+                            update_view.latest = Some(rel.version.clone());
+                            update_view.message.clear();
+                            let text = format!("새 버전 v{}이(가) 있습니다 · ⚙ 설정 → 업데이트에서 설치하세요.", rel.version);
+                            set_status(&webview, &mut current_status, text);
+                            pending_release = Some(rel);
+                        }
+                        Ok(None) => {
+                            update_view.status = "latest";
+                            update_view.message.clear();
+                        }
+                        // 자동 확인 실패(오프라인 등)는 조용히 넘긴다
+                        Err(e) if manual => {
+                            update_view.status = "error";
+                            update_view.message = e;
+                        }
+                        Err(_) => update_view.status = "idle",
+                    }
+                    push_update_view(&webview, &update_view);
+                }
+                UserEvent::InstallUpdate => {
+                    if update_view.status == "downloading" {
+                        // 이미 받는 중
+                    } else if let Some(rel) = pending_release.clone() {
+                        update_view.status = "downloading";
+                        update_view.message = "받는 중…".to_string();
+                        push_update_view(&webview, &update_view);
+                        let proxy = proxy.clone();
+                        thread::spawn(move || {
+                            let mut last = Instant::now() - Duration::from_secs(1);
+                            let result = update::install(&rel, &mut |done, total| {
+                                if last.elapsed() < Duration::from_millis(300) && done < total {
+                                    return;
+                                }
+                                last = Instant::now();
+                                let text = format!(
+                                    "업데이트 받는 중 v{} · {} / {}",
+                                    rel.version,
+                                    locall::download::human(done),
+                                    locall::download::human(total)
+                                );
+                                let _ = proxy.send_event(UserEvent::UpdateProgress(text));
+                            });
+                            let _ = proxy.send_event(match result {
+                                Ok(()) => UserEvent::UpdateInstalled,
+                                Err(e) => UserEvent::UpdateFailed(format!("{:#}", e)),
+                            });
+                        });
+                    } else {
+                        let _ = proxy.send_event(UserEvent::CheckUpdate);
+                    }
+                }
+                UserEvent::UpdateProgress(text) => {
+                    update_view.message = text.clone();
+                    push_update_view(&webview, &update_view);
+                    set_status(&webview, &mut current_status, text);
+                }
+                UserEvent::UpdateInstalled => {
+                    match std::process::Command::new(&exe_path).arg(update::AFTER_UPDATE_ARG).spawn() {
+                        Ok(_) => *control_flow = ControlFlow::Exit,
+                        Err(e) => {
+                            update_view.status = "error";
+                            update_view.message = format!("업데이트는 설치했지만 다시 켜지 못했습니다. LocalL을 다시 실행해 주세요 ({})", e);
+                            push_update_view(&webview, &update_view);
+                            set_status(&webview, &mut current_status, update_view.message.clone());
+                        }
+                    }
+                }
+                UserEvent::UpdateFailed(e) => {
+                    update_view.status = if pending_release.is_some() { "available" } else { "error" };
+                    update_view.message = format!("업데이트 실패: {}", e);
+                    push_update_view(&webview, &update_view);
+                    set_status(&webview, &mut current_status, update_view.message.clone());
                 }
             },
             Event::WindowEvent { event, .. } => match event {
@@ -820,6 +984,20 @@ fn run_app() -> Result<()> {
             _ => (),
         }
     });
+}
+
+fn set_status(webview: &wry::WebView, current: &mut String, text: String) {
+    if text != *current {
+        *current = text;
+        let js = format!("window.setStatus({});", serde_json::json!(current));
+        let _ = webview.evaluate_script(&js);
+    }
+}
+
+fn push_update_view(webview: &wry::WebView, view: &UpdateView) {
+    if let Ok(json) = serde_json::to_string(view) {
+        let _ = webview.evaluate_script(&format!("window.onUpdateState && window.onUpdateState({});", json));
+    }
 }
 
 fn main() {
