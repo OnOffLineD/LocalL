@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="2" y="4" width="20" height="16" rx="3"></rect>
+  <line x1="6" y1="8" x2="6.01" y2="8"></line>
+  <line x1="10" y1="8" x2="10.01" y2="8"></line>
+  <line x1="14" y1="8" x2="14.01" y2="8"></line>
+  <line x1="18" y1="8" x2="18.01" y2="8"></line>
+  <line x1="6" y1="12" x2="6.01" y2="12"></line>
+  <line x1="10" y1="12" x2="10.01" y2="12"></line>
+  <line x1="14" y1="12" x2="14.01" y2="12"></line>
+  <line x1="18" y1="12" x2="18.01" y2="12"></line>
+  <line x1="8" y1="16" x2="16" y2="16"></line>
+</svg>
