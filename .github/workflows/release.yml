@@ -2,13 +2,16 @@
 # 앱(locall.exe)은 시작할 때 최신 Release를 확인하고, 사용자가 누르면 이 zip으로 업데이트한다.
 #
 # 새 버전 내는 순서:
-#   1. Cargo.toml의 version을 올린다 (예: 0.2.0)  2. 커밋·푸시
-#   3. git tag v0.2.0 && git push origin v0.2.0
+#   1. Cargo.toml의 version을 올린다 (예: 0.2.0)  2. 커밋·푸시 (main)
+#   3. 둘 중 하나:
+#      - GitHub → Actions → Release → "Run workflow" (태그 v0.2.0을 main에 만들어 준다)
+#      - git tag v0.2.0 && git push origin v0.2.0
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -19,15 +22,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check tag matches Cargo.toml version
+      - name: Decide tag from Cargo.toml version
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}".TrimStart('v')
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          if ($tag -ne $ver) {
-            Write-Error "Tag v$tag does not match Cargo.toml version $ver. Bump Cargo.toml first."
-            exit 1
+          if ("${{ github.event_name }}" -eq "push") {
+            $tag = "${{ github.ref_name }}"
+            if ($tag.TrimStart('v') -ne $ver) {
+              Write-Error "Tag $tag does not match Cargo.toml version $ver. Bump Cargo.toml first."
+              exit 1
+            }
+          } else {
+            # 수동 실행: Cargo.toml 버전으로 태그를 만든다. 이미 있으면 버전을 먼저 올려야 한다.
+            $tag = "v$ver"
+            $exists = $false
+            try { gh release view $tag *> $null; $exists = ($LASTEXITCODE -eq 0) } catch { $exists = $false }
+            # gh가 "없음"으로 끝난 종료 코드가 이 단계의 결과로 남지 않게 한다
+            $global:LASTEXITCODE = 0
+            if ($exists) {
+              Write-Error "Release $tag already exists. Bump the version in Cargo.toml first."
+              exit 1
+            }
           }
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Releasing $tag"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -54,4 +74,5 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/LocalL-windows-x64.zip dist/LocalL-windows-x64.zip.sha256 --title "LocalL ${{ github.ref_name }}" --generate-notes
+        # 수동 실행이면 --target 커밋에 태그가 새로 만들어진다
+        run: gh release create "${{ env.TAG }}" dist/LocalL-windows-x64.zip dist/LocalL-windows-x64.zip.sha256 --target "${{ github.sha }}" --title "LocalL ${{ env.TAG }}" --generate-notes
