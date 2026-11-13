@@ -56,12 +56,35 @@ jobs:
       - name: Build
         run: cargo build --release --bins --locked
 
+      # 실행 중에 불러오는 DLL. 판을 고정하고 SHA-256을 확인한다.
+      # - onnxruntime.dll: ort 2.0.0-rc.15는 ONNX Runtime 1.17 이상이 필요하다
+      # - pdfium.dll: pdfium-render 0.9.4의 pdfium_latest는 PDFium 7881에 맞춰져 있다
+      - name: Download runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dll | Out-Null
+          function Get-Checked($url, $file, $sha) {
+            Invoke-WebRequest -Uri $url -OutFile $file
+            $got = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            if ($got -ne $sha) { throw "$file checksum mismatch: $got" }
+          }
+          Get-Checked "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip" "dll/ort.zip" "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da"
+          Expand-Archive dll/ort.zip -DestinationPath dll/ort
+          Copy-Item dll/ort/onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll, dll/ort/onnxruntime-win-x64-1.22.0/lib/onnxruntime_providers_shared.dll dll/
+          Get-Checked "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-win-x64.tgz" "dll/pdfium.tgz" "73cc0de638ac2095e7445bf56a38200a5b7c7ca0e9f4ba144598f2457377ac08"
+          New-Item -ItemType Directory -Force dll/pdfium | Out-Null
+          tar -xzf dll/pdfium.tgz -C dll/pdfium
+          Copy-Item dll/pdfium/bin/pdfium.dll dll/
+          Get-ChildItem dll/*.dll
+
       - name: Package
         shell: pwsh
         run: |
           $out = "dist/LocalL"
           New-Item -ItemType Directory -Force "$out/assets/ui", "$out/locall/assets" | Out-Null
           Copy-Item target/release/locall.exe, target/release/locall-index.exe, target/release/locall-search.exe $out
+          Copy-Item dll/*.dll $out
           Copy-Item assets/ui/* "$out/assets/ui"
           Copy-Item config.json, LocalL_Rust.bat, LocalL.bat, index.bat, requirements.txt $out
           Copy-Item locall/*.py "$out/locall"
