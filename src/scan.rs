@@ -23,11 +23,12 @@ pub struct ScanReport {
     pub denied: usize,
 }
 
-fn norm_path(p: &str) -> String {
+pub fn norm_path(p: &str) -> String {
     p.replace('/', "\\").to_lowercase()
 }
 
-fn is_under(path_n: &str, parents: &[String]) -> bool {
+/// `path_n`이 `parents` 중 하나와 같거나 그 아래에 있는지 (둘 다 [`norm_path`]로 정리한 값)
+pub fn is_under(path_n: &str, parents: &[String]) -> bool {
     let mut path_with_slash = path_n.to_string();
     if !path_with_slash.ends_with('\\') {
         path_with_slash.push('\\');
@@ -69,6 +70,52 @@ fn get_volume_label(drive: &str) -> String {
 #[cfg(not(windows))]
 fn get_volume_label(_drive: &str) -> String {
     String::new()
+}
+
+/// 드라이브 하나 (설정 화면의 "드라이브 추가" 칩)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DriveInfo {
+    /// `D:\`
+    pub path: String,
+    pub label: String,
+    /// fixed | removable | remote | ramdisk
+    pub kind: &'static str,
+}
+
+/// 이 PC의 드라이브 목록 (CD/DVD 드라이브 제외). 네트워크 드라이브는 끊겨 있으면
+/// 이름을 읽는 데 오래 걸릴 수 있어 이름을 읽지 않는다.
+#[cfg(windows)]
+pub fn list_drives() -> Vec<DriveInfo> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+
+    let mask = unsafe { GetLogicalDrives() };
+    let mut out = Vec::new();
+    for i in 0..26u32 {
+        if mask & (1 << i) == 0 {
+            continue;
+        }
+        let path = format!("{}:\\", (b'A' + i as u8) as char);
+        let root: Vec<u16> = OsStr::new(&path).encode_wide().chain(Some(0)).collect();
+        // 2 이동식, 3 고정, 4 네트워크, 5 CD/DVD, 6 램디스크
+        let kind = match unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) } {
+            2 => "removable",
+            3 => "fixed",
+            4 => "remote",
+            6 => "ramdisk",
+            _ => continue,
+        };
+        let label = if kind == "remote" { String::new() } else { get_volume_label(&path) };
+        out.push(DriveInfo { path, label, kind });
+    }
+    out
+}
+
+#[cfg(not(windows))]
+pub fn list_drives() -> Vec<DriveInfo> {
+    Vec::new()
 }
 
 pub fn detect_cloud_paths(cfg: &Config) -> Vec<String> {
@@ -134,9 +181,17 @@ where
     let ext_map = ext_to_kind_map();
 
     let mut stack = Vec::new();
+    // 다른 루트 안에 든 루트(예: D:\ 와 D:\사진)는 그 루트로서 한 번만 훑는다
+    let mut root_keys: HashSet<String> = HashSet::new();
 
     for r in roots {
         let r_norm = norm_path(r);
+        if !root_keys.insert(r_norm.trim_end_matches('\\').to_string()) {
+            continue; // 같은 루트가 두 번 적힘
+        }
+        if is_under(&r_norm, &excluded) {
+            continue; // 루트 자체(또는 그 위 폴더)를 제외했다
+        }
         if is_under(&r_norm, &cloud) {
             report.cloud.push(r.clone());
         } else if Path::new(r).is_dir() {
@@ -210,7 +265,9 @@ where
                     continue;
                 }
 
-                stack.push(p_str.clone());
+                if !root_keys.contains(&path_n) {
+                    stack.push(p_str.clone());
+                }
 
                 if include_kinds.contains("dir") {
                     on_entry(FileEntry {

@@ -50,7 +50,14 @@ fn format_num<T: std::fmt::Display>(n: T) -> String {
     out
 }
 
-fn scan_phase(con: &mut rusqlite::Connection, cfg: &locall::config::Config, roots: &[String]) -> Result<()> {
+/// `prune_outside`: 설정의 검색 폴더 전체로 도는 중이면 true. 그러면 어느 검색 폴더에도 속하지 않는
+/// 항목(검색 폴더 목록에서 뺀 폴더의 파일)도 색인에서 지운다. `--root`로 일부만 돌 때는 false.
+fn scan_phase(
+    con: &mut rusqlite::Connection,
+    cfg: &locall::config::Config,
+    roots: &[String],
+    prune_outside: bool,
+) -> Result<()> {
     let t0 = Instant::now();
     let mut existing: HashMap<String, ExistingFile> = HashMap::new();
 
@@ -119,25 +126,32 @@ fn scan_phase(con: &mut rusqlite::Connection, cfg: &locall::config::Config, root
 
     // 사라진 항목 정리
     let mut removed_count = 0;
+    let mut outside_count = 0;
+    let with_slash = |r: &String| {
+        let mut s = r.replace('/', "\\").to_lowercase();
+        if !s.ends_with('\\') {
+            s.push('\\');
+        }
+        s
+    };
     let live_roots: Vec<String> = roots
         .iter()
         .filter(|r| std::path::Path::new(r).is_dir() || report.cloud.contains(*r))
-        .map(|r| {
-            let mut s = r.replace('/', "\\").to_lowercase();
-            if !s.ends_with('\\') {
-                s.push('\\');
-            }
-            s
-        })
+        .map(with_slash)
         .collect();
+    // 지금 없는 검색 폴더(뽑힌 USB 등)도 포함: 그 파일은 다시 꽂을 때를 위해 남겨 둔다
+    let all_roots: Vec<String> = roots.iter().map(with_slash).collect();
+    let prune_outside = prune_outside && !all_roots.is_empty();
 
     for (path, row) in &existing {
         if !seen.contains(&row.id) {
             let path_norm = path.replace('/', "\\").to_lowercase();
-            let is_in_live = live_roots.iter().any(|lr| path_norm.starts_with(lr));
-            if is_in_live {
+            if live_roots.iter().any(|lr| path_norm.starts_with(lr)) {
                 remove_file(&tx, row.id)?;
                 removed_count += 1;
+            } else if prune_outside && !all_roots.iter().any(|r| path_norm.starts_with(r)) {
+                remove_file(&tx, row.id)?;
+                outside_count += 1;
             }
         }
     }
@@ -148,12 +162,13 @@ fn scan_phase(con: &mut rusqlite::Connection, cfg: &locall::config::Config, root
     let elapsed = t0.elapsed().as_secs_f64();
 
     println!(
-        "[훑기] {}개 확인 ({:.1}초) · 새로 {} · 변경 {} · 삭제 {}",
+        "[훑기] {}개 확인 ({:.1}초) · 새로 {} · 변경 {} · 삭제 {}{}",
         format_num(total_scanned),
         elapsed,
         format_num(new_count),
         format_num(changed_count),
-        format_num(removed_count)
+        format_num(removed_count),
+        if outside_count > 0 { format!(" · 검색 폴더 밖 정리 {}", format_num(outside_count)) } else { String::new() }
     );
 
     let mut sorted_kinds: Vec<_> = kinds_count.into_iter().collect();
@@ -594,11 +609,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let cfg = load_config(None)?;
 
-    let roots = if !args.root.is_empty() {
-        args.root
-    } else {
-        cfg.roots.clone()
-    };
+    let from_config = args.root.is_empty();
+    let roots = if from_config { cfg.roots.clone() } else { args.root };
 
     let db_path = args.db.unwrap_or_else(default_db_path);
     let mut con = connect(&db_path, false)?;
@@ -612,7 +624,7 @@ fn main() -> Result<()> {
     }
     set_meta(&con, "signature", &signature)?;
 
-    scan_phase(&mut con, &cfg, &roots)?;
+    scan_phase(&mut con, &cfg, &roots, from_config)?;
     bump_version(&con)?; // 떠 있는 검색 앱이 바뀐 색인을 다시 읽게 한다
 
     if args.scan_only {
