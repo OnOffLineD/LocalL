@@ -29,5 +29,6 @@
   "max_doc_mb": 200,
   "min_image_kb": 8,
   "model": "google/embeddinggemma-2",
-  "dim": 512
+  "dim": 512,
+  "index_cuda": false
 }

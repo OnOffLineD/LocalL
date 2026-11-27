@@ -159,6 +159,14 @@ const BOI: i64 = 255_999; // <|image>
 const IMAGE_TOKEN: i64 = 258_880; // <|image|>
 const EOI: i64 = 258_882; // <image|>
 
+/// GPU 실행 백엔드 종류
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GpuBackend {
+    None,
+    DirectMl,
+    Cuda { device_id: i32, vram_bytes: u64 },
+}
+
 struct Onnx {
     env: ort::environment::Environment,
     text: ort::session::Session,
@@ -166,18 +174,31 @@ struct Onnx {
     /// 시각 인코더: 파일이 있으면 첫 사진 검색 때 올린다 (약 700MB라 글자만 쓸 때는 안 올림)
     vision: Option<ort::session::Session>,
     vision_path: Option<PathBuf>,
-    /// DirectML판 onnxruntime을 불러와 GPU를 쓸 수 있는지
-    dml: bool,
+    backend: GpuBackend,
     text_gpu: bool,
     vision_gpu: bool,
     dim: usize,
 }
 
-/// 어떤 모델을 GPU(DirectML)로 돌릴지
-#[derive(Clone, Copy)]
+/// 어떤 모델을 GPU로 돌릴지
+#[derive(Clone, Copy, Default)]
 pub struct GpuUse {
     pub text: bool,
     pub vision: bool,
+    /// true면 models/onnx/cuda의 CUDA EP를 사용한다 (색인기 전용)
+    pub cuda: bool,
+    pub cuda_device_id: i32,
+    pub vram_bytes: u64,
+}
+
+impl GpuUse {
+    pub fn cpu() -> Self {
+        Self::default()
+    }
+
+    pub fn cuda(device_id: i32, vram_bytes: u64) -> Self {
+        Self { text: true, vision: true, cuda: true, cuda_device_id: device_id, vram_bytes }
+    }
 }
 
 /// GPU(DirectML)는 LOCALL_ONNX_DEVICE=gpu 일 때만 쓴다. 이 모델에서는 DirectML이 느리고
@@ -210,14 +231,22 @@ fn onnx_dir() -> PathBuf {
     base_dir().join("models").join("onnx")
 }
 
-/// onnxruntime.dll 위치와 DirectML판인지. GPU를 쓸 수 있으면 models/onnx/dml의 DirectML판
-/// (CPU로도 돌릴 수 있다), 아니면 실행 파일 옆 → models/onnx → 포터블 파이썬의 onnxruntime 순.
-fn find_onnxruntime() -> Option<(PathBuf, bool)> {
+/// onnxruntime.dll 위치와 사용 가능한 GPU 백엔드.
+/// CUDA가 요청됐고 models/onnx/cuda가 준비돼 있으면 CUDA판, 아니면 DirectML(허용 시) → CPU 순.
+fn find_onnxruntime(gpu: GpuUse) -> Option<(PathBuf, GpuBackend)> {
+    if gpu.cuda {
+        if let Some(cuda_ort) = crate::cuda::prepare_cuda_dlls() {
+            return Some((
+                cuda_ort,
+                GpuBackend::Cuda { device_id: gpu.cuda_device_id, vram_bytes: gpu.vram_bytes },
+            ));
+        }
+    }
     let dml = dml_dir();
     if gpu_allowed() && dml.join("onnxruntime.dll").is_file() && preload_dll(&dml.join("DirectML.dll")) {
-        return Some((dml.join("onnxruntime.dll"), true));
+        return Some((dml.join("onnxruntime.dll"), GpuBackend::DirectMl));
     }
-    find_cpu_onnxruntime().map(|p| (p, false))
+    find_cpu_onnxruntime().map(|p| (p, GpuBackend::None))
 }
 
 fn find_cpu_onnxruntime() -> Option<PathBuf> {
@@ -243,18 +272,53 @@ fn onnx_file(name: &str) -> Option<PathBuf> {
     (model.is_file() && dir.join(format!("{}.onnx_data", name)).is_file()).then_some(model)
 }
 
-/// 세션 만들기. gpu면 DirectML로 해 보고, 안 되면 CPU로. (세션, 실제로 GPU인지)
-fn make_session(env: &ort::environment::Environment, model: &Path, gpu: bool) -> Result<(ort::session::Session, bool)> {
-    if gpu {
-        match make_gpu_session(env, model) {
-            Ok(s) => return Ok((s, true)),
-            Err(e) => eprintln!("[모델] GPU(DirectML)로 열지 못해 CPU로 엽니다: {:#}", e),
+/// 세션 만들기. backend에 따라 CUDA/DirectML로 시도하고, 실패하면 CPU로 폴백. (세션, 실제로 GPU인지)
+fn make_session(
+    env: &ort::environment::Environment,
+    model: &Path,
+    backend: GpuBackend,
+    use_gpu: bool,
+) -> Result<(ort::session::Session, bool)> {
+    if use_gpu {
+        match backend {
+            GpuBackend::Cuda { device_id, .. } => match make_cuda_session(env, model, device_id) {
+                Ok(s) => return Ok((s, true)),
+                Err(e) => eprintln!("[모델] GPU(CUDA)로 열지 못해 CPU로 엽니다: {:#}", e),
+            },
+            GpuBackend::DirectMl => match make_dml_session(env, model) {
+                Ok(s) => return Ok((s, true)),
+                Err(e) => eprintln!("[모델] GPU(DirectML)로 열지 못해 CPU로 엽니다: {:#}", e),
+            },
+            GpuBackend::None => {}
         }
     }
     make_cpu_session(env, model).map(|s| (s, false))
 }
 
-fn make_gpu_session(env: &ort::environment::Environment, model: &Path) -> Result<ort::session::Session> {
+fn make_cuda_session(
+    env: &ort::environment::Environment,
+    model: &Path,
+    device_id: i32,
+) -> Result<ort::session::Session> {
+    use ort::ep::cuda::ConvAlgorithmSearch;
+    use ort::ep::{ArenaExtendStrategy, CUDA};
+    let fail = |e: &dyn std::fmt::Display| anyhow!("{}", e);
+    // 4~6GB VRAM에서 아레나 단편화 및 cuDNN 워크스페이스 폭증을 막기 위해
+    // SameAsRequested + Heuristic 조합을 쓰고, Ampere+에서는 TF32로 fp32 행렬곱을 가속한다.
+    let mut builder = ort::session::Session::builder(env)
+        .map_err(|e| fail(&e))?
+        .with_execution_providers([CUDA::default()
+            .with_device_id(device_id)
+            .with_arena_extend_strategy(ArenaExtendStrategy::SameAsRequested)
+            .with_conv_algorithm_search(ConvAlgorithmSearch::Heuristic)
+            .with_tf32(true)
+            .build()
+            .error_on_failure()])
+        .map_err(|e| fail(&e))?;
+    builder.commit_from_file(model).map_err(|e| fail(&e))
+}
+
+fn make_dml_session(env: &ort::environment::Environment, model: &Path) -> Result<ort::session::Session> {
     use ort::ep::directml::{DirectML, PerformancePreference};
     let fail = |e: &dyn std::fmt::Display| anyhow!("{}", e);
     // DirectML은 메모리 패턴 최적화와 병렬 실행을 지원하지 않는다 (ONNX Runtime 문서)
@@ -524,7 +588,7 @@ impl Onnx {
         let (Some(model), true) = (onnx_file("model"), tok_path.is_file()) else {
             return Ok(None);
         };
-        let Some((dll, dml)) = find_onnxruntime() else {
+        let Some((dll, backend)) = find_onnxruntime(gpu) else {
             return Ok(None);
         };
 
@@ -533,7 +597,8 @@ impl Onnx {
             .with_name("locall")
             .build()
             .map_err(|e| anyhow!("onnxruntime 초기화 실패: {}", e))?;
-        let (text, text_gpu) = make_session(&env, &model, dml && gpu.text)?;
+        let has_gpu = backend != GpuBackend::None;
+        let (text, text_gpu) = make_session(&env, &model, backend, has_gpu && gpu.text)?;
         let tokenizer = tokenizers::Tokenizer::from_file(&tok_path)
             .map_err(|e| anyhow!("토크나이저 적재 실패: {}", e))?;
 
@@ -544,9 +609,9 @@ impl Onnx {
             tokenizer,
             vision: None,
             vision_path,
-            dml,
+            backend,
             text_gpu,
-            vision_gpu: dml && gpu.vision,
+            vision_gpu: has_gpu && gpu.vision,
             dim: cfg.dim,
         };
         let v = me.query("예열")?; // 첫 추론은 느리므로 미리 한 번
@@ -560,15 +625,19 @@ impl Onnx {
         self.vision_path.is_some()
     }
 
-    /// 화면·기록용 장치 설명 (예: "글자 cpu · 사진 gpu")
+    /// 화면·기록용 장치 설명 (예: "onnx 글자 gpu · 사진 gpu (CUDA)")
     fn device(&self) -> String {
         let d = |gpu: bool| if gpu { "gpu" } else { "cpu" };
         let mut s = format!("onnx 글자 {}", d(self.text_gpu));
         if self.has_vision() {
             s.push_str(&format!(" · 사진 {}", d(self.vision_gpu)));
         }
-        if self.dml {
-            s.push_str(" (DirectML)");
+        if self.text_gpu || self.vision_gpu {
+            match self.backend {
+                GpuBackend::Cuda { .. } => s.push_str(" (CUDA)"),
+                GpuBackend::DirectMl => s.push_str(" (DirectML)"),
+                GpuBackend::None => {}
+            }
         }
         s
     }
@@ -622,6 +691,13 @@ impl Onnx {
             ids.push(v);
         }
         let gpu = self.text_gpu;
+        // 4GB급 CUDA GPU에서는 문서 배치 토큰 예산을 절반(4096)으로 낮춰 OOM을 방지한다
+        let token_budget = match self.backend {
+            GpuBackend::Cuda { vram_bytes, .. } if vram_bytes > 0 && vram_bytes < 6 * 1024 * 1024 * 1024 => {
+                DOC_TOKEN_BUDGET / 2
+            }
+            _ => DOC_TOKEN_BUDGET,
+        };
         let bucket = |n: usize| if gpu { n.div_ceil(GPU_LEN_BUCKET) * GPU_LEN_BUCKET } else { n };
         let mut order: Vec<usize> = (0..ids.len()).collect();
         order.sort_by_key(|&i| ids[i].len());
@@ -633,7 +709,7 @@ impl Onnx {
             let mut end = start + 1;
             while end < order.len()
                 && end - start < MAX_DOC_BATCH
-                && (end - start + 1) * bucket(ids[order[end]].len()) <= DOC_TOKEN_BUDGET
+                && (end - start + 1) * bucket(ids[order[end]].len()) <= token_budget
             {
                 end += 1;
             }
@@ -681,7 +757,7 @@ impl Onnx {
         use ort::value::Tensor;
         if self.vision.is_none() {
             let p = self.vision_path.clone().ok_or_else(|| anyhow!("시각 인코더 파일이 없습니다"))?;
-            let (session, on_gpu) = make_session(&self.env, &p, self.vision_gpu)?;
+            let (session, on_gpu) = make_session(&self.env, &p, self.backend, self.vision_gpu)?;
             self.vision_gpu = on_gpu;
             self.vision = Some(session);
         }
@@ -734,8 +810,8 @@ impl Embedder {
     pub fn spawn(cfg: &Config) -> Result<Self> {
         // LOCALL_EMBED=python 이면 ONNX를 건너뛴다 (비교·문제 확인용)
         let force_python = std::env::var("LOCALL_EMBED").map_or(false, |v| v.eq_ignore_ascii_case("python"));
-        // 검색 앱: 검색어는 CPU로도 20ms라 GPU 메모리를 아끼고, 무거운 사진만 GPU로
-        let gpu = GpuUse { text: false, vision: true };
+        // 검색 앱: CUDA는 쓰지 않고 CPU를 유지해 상시 VRAM 점유를 막는다 (DirectML은 환경변수로만)
+        let gpu = GpuUse { text: false, vision: true, ..Default::default() };
         let onnx = match if force_python { Ok(None) } else { Onnx::load(cfg, gpu) } {
             Ok(o) => o,
             Err(e) => {

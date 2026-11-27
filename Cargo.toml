@@ -1,6 +1,6 @@
 [package]
 name = "locall"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["OnOffLineD <OnOffLineD@users.noreply.github.com>"]
 description = "High-performance portable desktop AI search tool in Rust"
@@ -41,7 +41,7 @@ simsimd = "5.9"
 half = { version = "2.4", default-features = false }
 
 # ONNX 질의 임베딩 (onnxruntime.dll은 실행 중에 불러온다)
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std", "directml"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std", "directml", "cuda"] }
 tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
 
 # PDF 본문/첫 쪽 그림 (pdfium.dll은 실행 중에 불러온다)

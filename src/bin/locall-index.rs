@@ -27,6 +27,12 @@ struct Args {
 
     #[arg(long, help = "Rust로 못 읽는 파일을 실패로 적지 않고 대기로 남김 (뒤이어 파이썬 색인기를 돌릴 때)")]
     leave_unsupported: bool,
+
+    #[arg(long, conflicts_with = "cpu", help = "NVIDIA CUDA GPU로 색인 가속 (런타임이 없으면 자동으로 받음)")]
+    cuda: bool,
+
+    #[arg(long, help = "설정의 index_cuda와 무관하게 CPU로만 색인")]
+    cpu: bool,
 }
 
 struct ExistingFile {
@@ -605,6 +611,88 @@ fn download_models() -> Result<()> {
     Ok(())
 }
 
+/// CUDA 가속이 켜진 경우 GPU를 점검하고 필요한 런타임 DLL을 온디맨드로 받는다.
+/// GPU가 없거나 다운로드에 실패하면 안내 후 CPU로 폴백한다.
+fn prepare_gpu(want_cuda: bool) -> GpuUse {
+    use locall::cuda::{check_gpu, cuda_runtime_missing, ensure_cuda_runtime, missing_bytes, CudaProgress, GpuCheck};
+    use locall::download::human;
+    use std::io::Write;
+
+    let cpu_default = GpuUse { text: true, vision: true, ..Default::default() };
+    if !want_cuda {
+        return cpu_default;
+    }
+
+    let gpu = match check_gpu() {
+        GpuCheck::Ready(g) => g,
+        GpuCheck::Unavailable(reason) => {
+            println!("[GPU] {} → CPU로 진행합니다.", reason);
+            return cpu_default;
+        }
+    };
+    println!(
+        "[GPU] {} ({:.1}GB VRAM · CC {}.{} · 드라이버 CUDA {})",
+        gpu.name,
+        gpu.vram_gb(),
+        gpu.cc_major,
+        gpu.cc_minor,
+        gpu.driver_cuda_str()
+    );
+
+    if cuda_runtime_missing() {
+        println!(
+            "[CUDA 받기] GPU 가속 런타임 {}을(를) 처음 한 번 받습니다 (NuGet / PyPI 공식). 끊겨도 다음에 이어 받습니다.",
+            human(missing_bytes())
+        );
+        let t = Instant::now();
+        let mut last = Instant::now() - Duration::from_secs(10);
+        let mut inline = false;
+        let mut start: Option<(u64, Instant)> = None;
+        let res = ensure_cuda_runtime(&mut |p| match p {
+            CudaProgress::Waiting => println!("[CUDA 받기] 다른 프로세스가 받는 중이라 기다립니다…"),
+            CudaProgress::Bytes { done, total, file } => {
+                let (from, since) = *start.get_or_insert((done, Instant::now()));
+                if last.elapsed() >= Duration::from_secs(1) || done == total {
+                    let secs = since.elapsed().as_secs_f64().max(0.1);
+                    print!(
+                        "\r[CUDA 받기] {} / {} ({}%) · {:.1}MB/s · {}      ",
+                        human(done),
+                        human(total),
+                        done * 100 / total.max(1),
+                        done.saturating_sub(from) as f64 / 1_048_576.0 / secs,
+                        file
+                    );
+                    let _ = std::io::stdout().flush();
+                    inline = true;
+                    last = Instant::now();
+                }
+            }
+            CudaProgress::Checking { file } => {
+                if std::mem::take(&mut inline) {
+                    println!();
+                }
+                println!("[CUDA 받기] {} 무결성 확인 중…", file);
+            }
+            CudaProgress::Extracting { file } => {
+                if std::mem::take(&mut inline) {
+                    println!();
+                }
+                println!("[CUDA 받기] {} DLL 추출 중…", file);
+            }
+        });
+        if inline {
+            println!();
+        }
+        if let Err(e) = res {
+            eprintln!("[CUDA 받기] 실패({:#}) → CPU로 진행합니다.", e);
+            return cpu_default;
+        }
+        println!("[CUDA 받기] 끝 ({:.0}초)", t.elapsed().as_secs_f64());
+    }
+
+    GpuUse::cuda(gpu.device_id, gpu.vram_bytes)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let cfg = load_config(None)?;
@@ -641,10 +729,12 @@ fn main() -> Result<()> {
 
     download_models()?;
 
+    let want_cuda = args.cuda || (!args.cpu && cfg.index_cuda);
+    let gpu = prepare_gpu(want_cuda);
+
     println!("[모델] 불러오는 중…");
     let t = Instant::now();
-    // 색인은 묶음이 크므로 글자·사진 모두 GPU로 (없으면 CPU)
-    let mut emb = Embedder::spawn_onnx(&cfg, GpuUse { text: true, vision: true })?;
+    let mut emb = Embedder::spawn_onnx(&cfg, gpu)?;
     println!("[모델] {} ({:.1}초)", emb.device, t.elapsed().as_secs_f64());
 
     let result = name_phase(&mut con, &mut emb)

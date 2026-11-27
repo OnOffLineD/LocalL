@@ -60,6 +60,8 @@ enum IpcMessage {
     GetConfig,
     #[serde(rename = "set_autostart")]
     SetAutostart { enabled: bool },
+    #[serde(rename = "set_index_cuda")]
+    SetIndexCuda { enabled: bool },
     #[serde(rename = "check_update")]
     CheckUpdate,
     #[serde(rename = "install_update")]
@@ -99,6 +101,7 @@ enum UserEvent {
     UpdateHotkey(String),
     GetConfig,
     SetAutostart(bool),
+    SetIndexCuda(bool),
     CheckUpdate,
     InstallUpdate,
     /// 새 버전 확인 결과 (수동 확인이면 오류도 보인다)
@@ -789,6 +792,11 @@ fn run_app() -> Result<()> {
     // 2. 전역 단축키 매니저 시작
     let mut hotkey_mgr = HotkeyManager::new(&cfg.hotkey).ok();
     let mut current_hotkey = cfg.hotkey.clone();
+    let mut current_index_cuda = cfg.index_cuda;
+    let (gpu_ready, gpu_label) = match locall::cuda::check_gpu() {
+        locall::cuda::GpuCheck::Ready(g) => (true, format!("{} ({:.0}GB)", g.name, g.vram_gb())),
+        locall::cuda::GpuCheck::Unavailable(msg) => (false, msg),
+    };
 
     // 3. Wry WebView 생성
     let jobs_for_ipc = job_tx.clone();
@@ -881,6 +889,9 @@ fn run_app() -> Result<()> {
                     }
                     IpcMessage::SetAutostart { enabled } => {
                         let _ = proxy_for_ipc.send_event(UserEvent::SetAutostart(enabled));
+                    }
+                    IpcMessage::SetIndexCuda { enabled } => {
+                        let _ = proxy_for_ipc.send_event(UserEvent::SetIndexCuda(enabled));
                     }
                     IpcMessage::CheckUpdate => {
                         let _ = proxy_for_ipc.send_event(UserEvent::CheckUpdate);
@@ -1049,6 +1060,9 @@ fn run_app() -> Result<()> {
                     let cfg = serde_json::json!({
                         "hotkey": current_hotkey,
                         "autostart": autostart::is_enabled(),
+                        "index_cuda": current_index_cuda,
+                        "gpu_ready": gpu_ready,
+                        "gpu_label": gpu_label,
                         "update": update_view,
                         "folders": { "roots": count(PathList::Roots), "excludes": count(PathList::Excludes) },
                     });
@@ -1065,6 +1079,20 @@ fn run_app() -> Result<()> {
                         Err(e) => format!(
                             "window.onAutostartUpdated(false, {}, {});",
                             autostart::is_enabled(),
+                            serde_json::json!(format!("{:#}", e))
+                        ),
+                    };
+                    let _ = webview.evaluate_script(&js);
+                }
+                UserEvent::SetIndexCuda(enabled) => {
+                    let js = match locall::config::save_index_cuda(enabled) {
+                        Ok(()) => {
+                            current_index_cuda = enabled;
+                            format!("window.onIndexCudaUpdated(true, {});", current_index_cuda)
+                        }
+                        Err(e) => format!(
+                            "window.onIndexCudaUpdated(false, {}, {});",
+                            current_index_cuda,
                             serde_json::json!(format!("{:#}", e))
                         ),
                     };

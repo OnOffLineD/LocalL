@@ -28,6 +28,8 @@ pub struct Config {
     pub model: String,
     #[serde(default = "default_dim")]
     pub dim: usize,
+    #[serde(default)]
+    pub index_cuda: bool,
 }
 
 fn default_true() -> bool { true }
@@ -481,6 +483,51 @@ pub fn save_hotkey(hotkey: &str) -> Result<()> {
     }
 
     Err(anyhow::anyhow!("hotkey 값을 저장할 수 없습니다."))
+}
+
+pub fn save_index_cuda(enabled: bool) -> Result<()> {
+    let _guard = config_lock();
+    let cfg_path = default_config_path();
+    let content = std::fs::read_to_string(&cfg_path)
+        .with_context(|| format!("설정 파일을 읽을 수 없습니다: {:?}", cfg_path))?;
+
+    let val_str = if enabled { "true" } else { "false" };
+    // 기존 "index_cuda": true/false 패턴이 있으면 서식을 보존한 채 치환
+    if let Some(pos) = content.find("\"index_cuda\"") {
+        let rest = &content[pos..];
+        if let Some(colon) = rest.find(':') {
+            let after_colon = &rest[colon + 1..];
+            let trimmed_start = after_colon.len() - after_colon.trim_start().len();
+            let after_ws = &after_colon[trimmed_start..];
+            let tok_len = if after_ws.starts_with("true") {
+                Some(4)
+            } else if after_ws.starts_with("false") {
+                Some(5)
+            } else {
+                None
+            };
+            if let Some(len) = tok_len {
+                let start_idx = pos + colon + 1 + trimmed_start;
+                let end_idx = start_idx + len;
+                let mut new_content = String::with_capacity(content.len() + 8);
+                new_content.push_str(&content[..start_idx]);
+                new_content.push_str(val_str);
+                new_content.push_str(&content[end_idx..]);
+                return write_atomic(&cfg_path, &new_content);
+            }
+        }
+    }
+
+    // 키가 아직 없으면 JSON 객체에 추가 저장
+    let mut val: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("설정 파일 JSON 파싱 실패: {:?}", cfg_path))?;
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert("index_cuda".into(), serde_json::Value::Bool(enabled));
+        let formatted = serde_json::to_string_pretty(&val)?;
+        return write_atomic(&cfg_path, &formatted);
+    }
+
+    Err(anyhow::anyhow!("index_cuda 값을 저장할 수 없습니다."))
 }
 
 #[cfg(test)]

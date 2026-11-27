@@ -1,5 +1,6 @@
 pub mod autostart;
 pub mod config;
+pub mod cuda;
 pub mod download;
 pub mod embed;
 pub mod extract;

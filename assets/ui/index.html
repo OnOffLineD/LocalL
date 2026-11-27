@@ -932,6 +932,15 @@
         <div class="menu-arrow">›</div>
       </div>
 
+      <div class="settings-menu-item" id="menu-index-cuda" role="switch" aria-checked="false">
+        <div class="menu-icon"><img src="assets/icon_settings.svg" alt="" /></div>
+        <div class="menu-info">
+          <div class="menu-label">GPU 색인 가속 (CUDA)</div>
+          <div class="menu-sub" id="display-index-cuda">꺼짐 · CPU 사용</div>
+        </div>
+        <div class="toggle-switch" id="toggle-index-cuda"></div>
+      </div>
+
       <div class="settings-menu-item" id="menu-autostart" role="switch" aria-checked="false">
         <div class="menu-icon"><img src="assets/icon_startup.svg" alt="" /></div>
         <div class="menu-info">
@@ -1364,8 +1373,53 @@
       displayHotkey.textContent = "현재: " + formatHotkey(currentHotkey);
     }
     if (cfg && typeof cfg.autostart === "boolean") setAutostartView(cfg.autostart);
+    if (cfg && typeof cfg.index_cuda === "boolean") {
+      gpuReady = !!cfg.gpu_ready;
+      gpuLabel = cfg.gpu_label || "";
+      setIndexCudaView(cfg.index_cuda);
+    }
     if (cfg && cfg.update) window.onUpdateState(cfg.update);
     if (cfg && cfg.folders) setFoldersSummary(cfg.folders.roots, cfg.folders.excludes);
+  };
+
+  // --- GPU 색인 가속 (CUDA) ---
+  const menuIndexCuda = document.getElementById("menu-index-cuda");
+  const toggleIndexCuda = document.getElementById("toggle-index-cuda");
+  const displayIndexCuda = document.getElementById("display-index-cuda");
+  let indexCudaOn = false;
+  let gpuReady = false;
+  let gpuLabel = "";
+
+  function setIndexCudaView(on) {
+    indexCudaOn = on;
+    toggleIndexCuda.classList.toggle("on", on);
+    menuIndexCuda.setAttribute("aria-checked", on ? "true" : "false");
+    displayIndexCuda.classList.remove("error");
+    if (on) {
+      displayIndexCuda.textContent = gpuReady
+        ? "켜짐 · " + gpuLabel
+        : "켜짐 · GPU 없음 (CPU 폴백)";
+    } else {
+      displayIndexCuda.textContent = gpuReady
+        ? "꺼짐 · " + gpuLabel
+        : "꺼짐 · CPU 사용";
+    }
+    displayIndexCuda.title = gpuLabel || displayIndexCuda.textContent;
+  }
+
+  menuIndexCuda.addEventListener("click", (e) => {
+    e.stopPropagation();
+    menuIndexCuda.classList.add("busy");
+    postToRust({ type: "set_index_cuda", enabled: !indexCudaOn });
+  });
+
+  window.onIndexCudaUpdated = function(ok, enabled, msg) {
+    menuIndexCuda.classList.remove("busy");
+    setIndexCudaView(!!enabled);
+    if (!ok) {
+      displayIndexCuda.textContent = msg || "변경하지 못했습니다.";
+      displayIndexCuda.classList.add("error");
+    }
   };
 
   // --- PC 시작 시 자동 실행 ---
